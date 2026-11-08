@@ -14,19 +14,21 @@ pluginManagement {
 }
 
 plugins {
-    id("truesim.settings") version "0.16.0"
+    id("truesim.settings") version "0.19.0"
 }
 
 rootProject.name = "effects-atmosphere"
 
 // Each module is published on its own: atmosphere-ephemeris needs only the JDK and common-math (a server computing
-// the sun takes just that); atmosphere-sky adds the star catalogue and the night sky as scene assets and components.
-include("atmosphere-ephemeris", "atmosphere-sky")
+// the sun takes just that); atmosphere-sky adds the star catalogue and the night sky as scene assets and components;
+// atmosphere-fog is the first render plugin: fog, fog volumes and indoor zones as a media shading hook of the engine.
+include("atmosphere-ephemeris", "atmosphere-sky", "atmosphere-fog")
 project(":atmosphere-ephemeris").projectDir = file("ephemeris")
 project(":atmosphere-sky").projectDir = file("sky")
+project(":atmosphere-fog").projectDir = file("fog")
 
 // Sibling checkouts are used as included builds when present (override with -Ptruesim.<repo>=<path>, or false).
-val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "scene")
+val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "common-graph", "scene", "ui", "engine")
 for (repo in truesimRepos) {
     providers.gradleProperty("truesim.$repo").orElse("../$repo").get()
         .takeIf { file(it).isDirectory }?.let { includeBuild(it) }
