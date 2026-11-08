@@ -59,6 +59,24 @@ hour by default; the daily rotation is a 3×3 matrix applied on the GPU).
 - `NightSky`: the per-view state (ephemeris every frame, star places when stale); `SkySettings`/`SkyTime` and the
   components `truesim.atmosphere.sky` and `truesim.atmosphere.sky-time`.
 
+### atmosphere-fog ([#4](https://github.com/true-sim/effects-atmosphere/issues/4))
+
+The first render plugin: fog as the engine's media shading hook `atmosphere.fog` (engine 0.192.0's hook points), so
+every way of shading (forward, the visibility buffer, transparency, particles, the sky) fogs alike.
+
+- **Area-based, not per object.** The engine's per-instance override entries give every point of an instance its
+  entry's fog for the whole ray to the camera: seen through a window from outside, the air in front of the glass took
+  the room's (clear) override. The hook instead integrates along the ray through regions: the outdoor height fog,
+  `FogVolume` components (boxes, ellipsoids: density, albedo, height falloff, blend distance) and `IndoorZone` components
+  (outdoor fog excluded or replaced, outdoor light dimmed). `FogRegions` gathers them from the scene in world terms;
+  `AtmosphereFog` (a technique per view) writes the nearest (caps and cull distance in `FogSettings`) camera-relative
+  into a frame buffer each frame and its address into the hook's record, merged with the scene's values for the hook.
+- **Integration.** The ray is cut at the boundaries of the regions it crosses (at most `regionsPerRay`, nearest first);
+  pieces in no region are height fog alone, integrated in closed form; pieces inside regions are integrated in `steps`
+  homogeneous slabs (energy-conserving: Hillaire 2015). Exact for hard-edged uniform regions at any step count.
+- **Light.** Isotropic ambient radiance plus the sun through Henyey-Greenstein; no sun shadows in the media yet (shafts
+  are V9's epipolar technique); zones dim the outdoor light inside.
+
 ## Tiers and quality presets
 
 Costs: CPU costs are measured here; GPU costs are the design report's estimates for the RX 9070 XT at 1080p (marked
