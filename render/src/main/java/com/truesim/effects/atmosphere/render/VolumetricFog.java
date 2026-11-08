@@ -9,6 +9,7 @@ import com.truesim.engine.graph.Access;
 import com.truesim.engine.graph.Buffer;
 import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
+import com.truesim.engine.graph.History;
 import com.truesim.engine.graph.Image;
 import com.truesim.engine.graph.ImageDesc;
 import com.truesim.engine.graph.PassContext;
@@ -47,9 +48,15 @@ import java.util.Objects;
  *   <li>{@code off}: the same as analytic for the fog (the hook stays the fog's to switch).
  * </ul>
  *
- * <p>Single-frame (no temporal reprojection yet: froxels at their centres, no jitter): a temporal pass (the design's
- * §8.4) is the follow-up. With an {@link Atmosphere}, the sky's ambient radiance is also read back to the CPU
- * ({@link Atmosphere#skyAmbient}) for the fog's own light beyond the grid.
+ * <p>A froxel is a point sample of the light reaching a volume 12 pixels wide and a tenth of its distance deep: lit or
+ * shadowed whole, the edges of light shafts step from froxel to froxel. Two ways to sample it whole (the design's
+ * §8.4), together or apart: {@code samples} points jittered within each froxel a frame, their mean (its cost times as
+ * many); and temporal accumulation ({@code history}, the default): a point jittered within it each frame (the R2
+ * sequence, shifted per froxel), last frame's froxels reprojected (through last frame's view-projection and slices)
+ * and kept by {@code history}, bounded by the froxel's and its neighbours' values this frame against ghosts: over some
+ * ten frames each froxel holds its volume's mean, shaft edges smooth and still. With an {@link Atmosphere}, the sky's
+ * ambient radiance is also read back to the CPU ({@link Atmosphere#skyAmbient}) for the fog's own light beyond the
+ * grid.
  */
 public final class VolumetricFog implements AtmosphereFog.FogFroxels {
 
@@ -67,13 +74,18 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
      * @param near metres: the first slice's end
      * @param far metres: the last slice's end, the grid's reach
      * @param lights whether the view's light list lights the fog (shadows included); off: the fog's own sun, unshadowed
+     * @param samples points sampled within each froxel a frame (1: its centre, or with history a jittered point)
+     * @param history how much of last frame's froxels each keeps, reprojected (0: none, each frame on its own)
      */
     public record Froxels(
         @Tunable(value = "pixels a fog froxel covers across and down", min = 2, max = 64) int tile,
         @Tunable(value = "fog froxel slices along each ray", min = 2, max = 256) int slices,
         @Tunable(value = "metres to the first fog froxel slice's end", min = 0.01, max = 100) float near,
         @Tunable(value = "metres the fog froxels reach along each ray", min = 1, max = 100_000) float far,
-        @Tunable("whether every light of the view lights the fog, with its shadows") boolean lights)
+        @Tunable("whether every light of the view lights the fog, with its shadows") boolean lights,
+        @Tunable(value = "points sampled within each fog froxel a frame", min = 1, max = 16) int samples,
+        @Tunable(value = "how much of last frame's fog froxels each keeps, reprojected (0: none)", min = 0,
+            max = 0.98) float history)
         implements TechniqueConfig {
     }
 
@@ -83,7 +95,8 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
 
     /** The froxels: the default. */
     public static final TechniqueKind<Froxels, VolumetricFog, Object> FROXEL = TechniqueKind.of(SLOT, "froxel",
-        new Froxels(12, 64, 0.5f, 300, true), "froxels over the view's frustum, every light with its shadows",
+        new Froxels(12, 64, 0.5f, 300, true, 1, 0.9f), "froxels over the view's frustum, every light with its "
+            + "shadows, sampled across each over frames",
         (fog, config) -> fog);
     /** The fog hook alone. */
     public static final TechniqueKind<Analytic, VolumetricFog, Object> ANALYTIC = TechniqueKind.of(SLOT, "analytic",
@@ -101,6 +114,14 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
     private final FroxelPush ambientPush = new FroxelPush();
     private final FroxelPush lightPush = new FroxelPush();
     private final FroxelPush integratePush = new FroxelPush();
+    private final FroxelPush temporalPush = new FroxelPush();
+    // The grid's view-projection and camera as this frame's hook record has them, and last frame's
+    private final float[] matrix = new float[16];
+    private final double[] camera = new double[3];
+    private final float[] lastMatrix = new float[16];
+    private final double[] lastCamera = new double[3];
+    private long writtenFrame = -1;
+    private boolean hasLast;
     private Image integrated;
     private float near;
     private float far;
@@ -130,6 +151,8 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
         near = g.setting(FROXEL.<Float>setting("near"));
         far = Math.max(g.setting(FROXEL.<Float>setting("far")), near * 2);
         boolean lit = g.setting(FROXEL.<Boolean>setting("lights"));
+        int samples = g.setting(FROXEL.<Integer>setting("samples"));
+        float keep = g.setting(FROXEL.<Float>setting("history"));
         ViewPort port = g.view();
         int pixelsWide = port.width();
         int pixelsHigh = port.height();
@@ -183,16 +206,32 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
             }
             common(lightPush, ctx, size, pixels, record).ambient(ctx.address(ambient))
                 .lights(lights != null ? ctx.address(lights) : ctx.address(ambient)).lit(lights != null ? 1 : 0)
-                .media(ctx.storage(media));
+                .media(ctx.storage(media)).samples(samples).frame((int) ctx.frame()).history(keep);
             ctx.dispatch(lightProgram, lightPush, (width + 3) / 4, (height + 3) / 4, (slices + 3) / 4);
         });
+
+        // Last frame's froxels reprojected and kept
+        History kept = keep > 0 ? g.history("fog froxels kept", grid) : null;
+        if (kept != null) {
+            Pipeline temporalProgram = g.computeProgram("shaders/atmosphere/froxels.spv", "temporalMain",
+                FroxelPush.BYTES);
+            g.pass("fog froxel history").read(media, Access.STORAGE_READ)
+                .read(kept.previous(), Access.SAMPLED_COMPUTE).write(kept.current(), Access.STORAGE_WRITE)
+                .record(ctx -> {
+                    common(temporalPush, ctx, size, pixels, record).media(ctx.storage(media))
+                        .integrated(ctx.storage(kept.current())).last(ctx.sampled(kept.previous()))
+                        .history(ctx.historyValid(kept) ? keep : 0);
+                    ctx.dispatch(temporalProgram, temporalPush, (width + 3) / 4, (height + 3) / 4, (slices + 3) / 4);
+                });
+        }
+        Image froxels = kept != null ? kept.current() : media;
 
         // Each column integrated
         Pipeline integrateProgram = g.computeProgram("shaders/atmosphere/froxels.spv", "integrateMain",
             FroxelPush.BYTES);
-        g.pass("fog froxel integration").read(media, Access.STORAGE_READ).write(result, Access.STORAGE_WRITE)
+        g.pass("fog froxel integration").read(froxels, Access.STORAGE_READ).write(result, Access.STORAGE_WRITE)
             .record(ctx -> {
-                common(integratePush, ctx, size, pixels, record).media(ctx.storage(media))
+                common(integratePush, ctx, size, pixels, record).media(ctx.storage(froxels))
                     .integrated(ctx.storage(result));
                 ctx.dispatch(integrateProgram, integratePush, (width + 7) / 8, (height + 7) / 8, 1);
             });
@@ -224,16 +263,44 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
         into.set(F32, offset + AtmosphereFogParameters.FROXEL_FAR.offset(), far);
         into.set(F32, offset + AtmosphereFogParameters.FROXEL_NEAR.offset(), near);
         into.set(I32, offset + AtmosphereFogParameters.FROXEL_SLICES.offset(), slices);
-        float[] m = view.camera().viewProjection();
-        row(into, offset + AtmosphereFogParameters.FROXEL_X.offset(), m, 0);
-        row(into, offset + AtmosphereFogParameters.FROXEL_Y.offset(), m, 1);
-        row(into, offset + AtmosphereFogParameters.FROXEL_W.offset(), m, 3);
+        long frame = ctx.frame();
+        if (frame != writtenFrame) { // a new frame: this one's camera, the one before kept for the history
+            if (writtenFrame >= 0) {
+                System.arraycopy(matrix, 0, lastMatrix, 0, 16);
+                System.arraycopy(camera, 0, lastCamera, 0, 3);
+                hasLast = true;
+            }
+            System.arraycopy(view.camera().viewProjection(), 0, matrix, 0, 16);
+            for (int a = 0; a < 3; a++) {
+                camera[a] = view.camera().position(a);
+            }
+            writtenFrame = frame;
+        }
+        row(into, offset + AtmosphereFogParameters.FROXEL_X.offset(), matrix, 0, 0, 0, 0);
+        row(into, offset + AtmosphereFogParameters.FROXEL_Y.offset(), matrix, 1, 0, 0, 0);
+        row(into, offset + AtmosphereFogParameters.FROXEL_W.offset(), matrix, 3, 0, 0, 0);
+        // Last frame's rows take a point relative to this frame's camera: moved to last frame's camera first
+        double dx = camera[0] - lastCamera[0];
+        double dy = camera[1] - lastCamera[1];
+        double dz = camera[2] - lastCamera[2];
+        row(into, offset + AtmosphereFogParameters.FROXEL_LAST_X.offset(), lastMatrix, 0, dx, dy, dz);
+        row(into, offset + AtmosphereFogParameters.FROXEL_LAST_Y.offset(), lastMatrix, 1, dx, dy, dz);
+        row(into, offset + AtmosphereFogParameters.FROXEL_LAST_W.offset(), lastMatrix, 3, dx, dy, dz);
+        long at = offset + AtmosphereFogParameters.FROXEL_LAST_CAMERA.offset();
+        into.set(F32, at, (float) dx);
+        into.set(F32, at + 4, (float) dy);
+        into.set(F32, at + 8, (float) dz);
+        into.set(F32, at + 12, hasLast ? 1f : 0f);
     }
 
-    /** Row {@code r} of the column-major matrix {@code m}. */
-    private static void row(MemorySegment into, long offset, float[] m, int r) {
-        for (int c = 0; c < 4; c++) {
+    /**
+     * Row {@code r} of the column-major matrix {@code m}, for a point moved by ({@code dx}, {@code dy}, {@code dz})
+     * first (its translation takes the move).
+     */
+    private static void row(MemorySegment into, long offset, float[] m, int r, double dx, double dy, double dz) {
+        for (int c = 0; c < 3; c++) {
             into.set(F32, offset + 4L * c, m[4 * c + r]);
         }
+        into.set(F32, offset + 12, (float) (m[12 + r] + m[r] * dx + m[4 + r] * dy + m[8 + r] * dz));
     }
 }

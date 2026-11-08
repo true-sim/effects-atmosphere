@@ -116,7 +116,15 @@ atmosphere.light(lights, 0, 1);                                            // th
   fog, fog volumes, indoor zones) in froxels over the view's frustum (12-pixel tiles, 64 slices from 0.5 m to 300 m,
   exponential), lit by every light of the view's light list after its shadow (the sun's cascades: shafts) and the
   sky's mean radiance, integrated front to back; the fog hook reads them up to their reach and continues as before.
-  No temporal reprojection yet (froxel centres, no jitter): the follow-up.
+  Each froxel is sampled across itself: a point jittered within it each frame (the R2 sequence, shifted per froxel),
+  last frame's froxels reprojected and kept (`render.fog.froxel.history`, 0.9; bounded by the froxel's and its six
+  neighbours' values this frame, against ghosts), so shaft edges are the froxels' means, smooth and still, where
+  centres alone aliased them into froxel-sized blocks; or `samples` jittered points a frame (no history, each sample
+  costs a froxel light pass). Points in the air take no normal: the engine's shadow lookup gives them no normal offset
+  and no PCSS search.
+- **The sun's and the moon's shadows are as soft as their discs:** `Atmosphere.light` gives a shadowed light its
+  disc's angular radius as its shadow spec's softness (the engine's PCSS and soft rays use it), a new spec only when
+  it changes by a thousandth.
 - **For other libraries (clouds):** `Atmosphere` (sun and moon directions, illuminance outside the atmosphere and at
   the camera, `transmittance(light, altitudeKm)`, `skyAmbient`, `sceneUnits`, `frameAddress`), the requests
   `AtmosphereLuts` and `SkyViewLut` (the tables and the volume, shared in the frame), and the Slang module
@@ -130,7 +138,9 @@ atmosphere.light(lights, 0, 1);                                            // th
   400 km within 9 %; a distant object's aerial perspective against the reference, and unchanged with the hook off; a
   star's and the moon's illuminance through the atmosphere, the moon lit towards the sun; environment light and a
   mirror's reflection from the captured sky, and nothing without the capture; captures only on change; the froxels
-  equal to the hook in the open and shadowed under a roof; the scene's components, the catalogue as an asset, and an
+  equal to the hook in the open and shadowed under a roof; shafts under a slatted roof sampled across the froxels and
+  kept over frames 2.7 times closer to the froxels' means than centres alone, and still (`VolumetricFogShaftsTest`);
+  the scene's components, the catalogue as an asset, and an
   allocation-free frame.
 
 ### What it costs
@@ -149,12 +159,16 @@ terrain, rocks, the sun's cascades, ambient occlusion, reflections; HIGH unless 
 | gradient sky (LOW) | 0.060 ms |
 | sky capture (512 x 256), when the sky changed | 0.009 ms, plus the engine's environment filtering 0.74 ms |
 | fog: sky ambient, froxel light (160 x 90 x 64, every light, cascaded shadows), integration | 0.002 + 0.043 + 0.021 ms |
+| fog in the room (the sun through the window): froxel light, history (reprojection, the neighbours' bounds) | 0.080 + 0.020 ms (centres alone, before: 0.068); 2 samples a frame: 0.150 + 0.020 |
 
 A still sun costs the atmosphere about 0.23 ms a frame at HIGH (0.14 ms at LOW, 1.38 ms at ULTRA); a moving sun adds a
 capture and the environment's filtering (0.75 ms) in each frame it moved more than `captureAngle` (0.25 degrees).
 The aerial perspective hook costs the shading little: frames with it off took 2.111 against 2.126 ms (one run; frame
 times vary by about 0.2 ms between runs). The design's estimate for the atmosphere was 0.15-0.25 ms; for froxel fog
-0.3-0.8 ms (this grid's 0.066 ms has no temporal pass yet).
+0.3-0.8 ms (this grid with its temporal pass: about 0.12 ms). The room's sun casts 3 cascades of 4096 texels with
+practical splits of 0.95 (the screenshots' scene): 0.16 ms of shadow atlas a frame while the sun moves, against 0.05
+for 2048 at 0.75, for 1 cm texels on its walls instead of 8 cm (the engine's PCSS filtering adds 0.1-0.15 ms of
+shading there).
 
 ## Data and licences
 

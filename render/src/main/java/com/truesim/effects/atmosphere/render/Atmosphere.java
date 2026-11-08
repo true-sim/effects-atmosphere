@@ -23,6 +23,8 @@ import com.truesim.engine.settings.EngineSettings;
 import com.truesim.engine.vulkan.FrameBuffer;
 import com.truesim.engine.vulkan.FrameSlots;
 import com.truesim.engine.vulkan.VulkanDevice;
+import com.truesim.scene.core.ShadowMethod;
+import com.truesim.scene.core.ShadowSpec;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -610,14 +612,27 @@ public final class Atmosphere implements AutoCloseable, AtmosphereFog.FogLightin
     /**
      * Sets the sun and the moon as directional lights {@code sunIndex} and {@code moonIndex} of {@code lights}
      * (negative: not set): shining from their directions with their illuminance at the camera, only where it changed
-     * (a light written again restarts what caches it). Allocates nothing.
+     * (a light written again restarts what caches it). A light that casts shadows takes its disc's angular radius as
+     * its shadow spec's softness (to a thousandth), so soft shadows (shadow maps' PCSS, soft rays) widen their
+     * penumbrae as the sun's half degree does. Allocates nothing, but a new spec when the softness changes.
      */
     public void light(Lights lights, int sunIndex, int moonIndex) {
         if (sunIndex >= 0) {
             set(lights, sunIndex, 0, sun);
+            soften(lights, sunIndex, sunRadius);
         }
         if (moonIndex >= 0) {
             set(lights, moonIndex, 1, moon);
+            soften(lights, moonIndex, moonRadius);
+        }
+    }
+
+    /** Light {@code index}'s shadow spec given {@code radius} as its softness, where it casts shadows of another. */
+    @AllowAllocation("a new spec when the disc's size changes by a thousandth: a few times a month")
+    private static void soften(Lights lights, int index, double radius) {
+        ShadowSpec spec = lights.shadow(index);
+        if (spec.method() != ShadowMethod.NONE && Math.abs(spec.softness() - radius) > 1e-3 * radius) {
+            lights.shadow(index, spec.softness(radius));
         }
     }
 
