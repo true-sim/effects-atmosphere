@@ -27,6 +27,10 @@ import com.truesim.engine.render.GeometryPool;
 import com.truesim.engine.render.GpuScene;
 import com.truesim.engine.render.Keys;
 import com.truesim.engine.render.Lights;
+import com.truesim.engine.render.Material;
+import com.truesim.engine.render.Materials;
+import com.truesim.engine.render.materials.MetallicRoughnessParameters;
+import com.truesim.common.math.color.Color;
 import com.truesim.engine.render.MeshletRenderer;
 import com.truesim.engine.render.SceneGeometry;
 import com.truesim.engine.render.SceneView;
@@ -57,6 +61,7 @@ final class AtmosphereRig implements AutoCloseable {
     final MeshletRenderer renderer;
     final Lights lights;
     final Textures textures;
+    final Materials materials;
     final FrameGraph graph;
     final Atmosphere atmosphere;
     final Environment environment;
@@ -69,8 +74,20 @@ final class AtmosphereRig implements AutoCloseable {
     private final TestTarget target;
     private final GpuBuffer pixels;
     private int instances;
+    /** Whether the sun and the moon light the scene (the atmosphere's lights); off: the sky's light alone. */
+    boolean lit = true;
+
+    /** Materials: grey and rough, a mirror, black and rough (ids in the table). */
+    final int grey;
+    final int mirror;
+    final int black;
 
     AtmosphereRig(VulkanDevice device, int width, int height) {
+        this(device, width, height, true);
+    }
+
+    /** With the sky captured into the environment ({@code capture}), or the environment left black. */
+    AtmosphereRig(VulkanDevice device, int width, int height, boolean captured) {
         this.device = device;
         this.width = width;
         this.height = height;
@@ -79,6 +96,14 @@ final class AtmosphereRig implements AutoCloseable {
         renderer = new MeshletRenderer(device, scene, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, slots);
         lights = new Lights(device, 4, 1, slots);
         textures = new Textures(device, slots);
+        materials = new Materials(device, 4, slots);
+        grey = materials.add(new Material(MetallicRoughnessParameters.DEFAULTS.withBaseColor(new Color(0.5, 0.5, 0.5, 1))
+            .withRoughness(1)));
+        mirror = materials.add(new Material(MetallicRoughnessParameters.DEFAULTS.withBaseColor(new Color(1, 1, 1, 1))
+            .withRoughness(0).withMetallic(1)));
+        black = materials.add(new Material(MetallicRoughnessParameters.DEFAULTS.withBaseColor(new Color(0, 0, 0, 1))
+            .withRoughness(1)));
+        scene.setMaterials(materials);
         graph = new FrameGraph(device, slots);
         atmosphere = new Atmosphere(device, slots, graph.settings());
         environment = Environment.uniform("atmosphere", 0, 0, 0);
@@ -97,18 +122,27 @@ final class AtmosphereRig implements AutoCloseable {
         pixels = GpuBuffer.hostVisible(device, 8L * width * height, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         port.add(new ClusteredForwardShading(geometry, view, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT)
                 .clearColor(0, 0, 0))
-            .add(new ClusteredLights(lights, view)).add(lighting).add(capture).add(sky).add(aerial)
+            .add(new ClusteredLights(lights, view)).add(lighting);
+        if (captured) {
+            port.add(capture);
+        }
+        port.add(sky).add(aerial)
             .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, target.output());
     }
 
     /** Adds {@code mesh} at ({@code x}, {@code y}, {@code z}) scaled by {@code scale}; returns its instance. */
     int add(MeshData mesh, double x, double y, double z, float scale) {
+        return add(mesh, grey, x, y, z, scale);
+    }
+
+    /** Adds {@code mesh} of {@code material} at ({@code x}, {@code y}, {@code z}) scaled by {@code scale}. */
+    int add(MeshData mesh, int material, double x, double y, double z, float scale) {
         int index;
         try (mesh) {
             index = pool.add(mesh);
         }
         int id = instances++;
-        scene.set(id, index, 0, x, y, z, 0, 0, 0, 1, scale, scale, scale);
+        scene.set(id, index, material, x, y, z, 0, 0, 0, 1, scale, scale, scale);
         return id;
     }
 
@@ -118,7 +152,9 @@ final class AtmosphereRig implements AutoCloseable {
             int slot = graph.beginFrame();
             slots.begin(slot);
             atmosphere.update(night, camera.position(0), camera.position(1), camera.position(2));
-            atmosphere.light(lights, 0, 1);
+            if (lit) {
+                atmosphere.light(lights, 0, 1);
+            }
             view.set(1, MeshletRenderer.MODE_LIT);
             graph.submit(0, 0);
             slots.end();
@@ -155,6 +191,8 @@ final class AtmosphereRig implements AutoCloseable {
         renderer.close();
         scene.close();
         lights.close();
+        scene.setMaterials(null);
+        materials.close();
         textures.close();
         pool.close();
     }

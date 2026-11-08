@@ -177,7 +177,7 @@ void aerialMain(uint3 id : SV_DispatchThreadID)
     SkyFrame frame = skyFrame(a, camera);
     float2 uv = (float2(id.xy) + 0.5) / float2(size);
     float3 direction = skyViewDirection(frame, uv);
-    // The part of the ray inside the atmosphere and above the ground
+    // The part of the ray inside the atmosphere
     float r = length(camera);
     float enter = 0;
     if (r > a[0].topRadius)
@@ -185,9 +185,10 @@ void aerialMain(uint3 id : SV_DispatchThreadID)
         enter = raySphere(camera, direction, a[0].topRadius);
         enter = enter < 0 ? 1e30 : enter;
     }
-    float toGround = raySphere(camera, direction, a[0].bottomRadius);
+    // The ground does not end the rays: what ends them is the scene's geometry (terrain above the planet's sphere,
+    // objects in the air), at whatever depth it is; below the ground the media keep the ground's density
     float toTop = raySphere(camera + direction * min(enter, 1e6), direction, a[0].topRadius + 1e-3);
-    float leave = toGround > 0 ? toGround : (enter < 1e29 ? enter + max(toTop, 0) : 0);
+    float leave = enter < 1e29 ? enter + max(toTop, 0) : 0;
     float3 radiance = 0;
     float3 throughput = 1;
     float before = 0;
@@ -206,7 +207,7 @@ void aerialMain(uint3 id : SV_DispatchThreadID)
 
 /**
  * The sky capture: the sky around the camera as an equirectangular panorama in the engine's convention
- * (engine-render's Environment: u around +y from +x towards +z, v from +y down to -y), without the discs of the sun
+ * (environment/filter.slang's panoramaUv: u = 0.5 + atan2(z, x) / 2 pi, v from +y down to -y), without the discs of the sun
  * and the moon (they light the scene as its directional lights) and without stars; with airglow and the Milky Way
  * through the atmosphere. Read from the sky-view table, or integrated per texel from space.
  */
@@ -222,7 +223,7 @@ void captureMain(uint3 id : SV_DispatchThreadID)
     AtmosphereFrame* a = push.atmosphere;
     float3 camera = viewPosition(a);
     float2 uv = (float2(id.xy) + 0.5) / float2(size);
-    float phi = uv.x * 2 * ATMOSPHERE_PI;
+    float phi = (uv.x - 0.5) * 2 * ATMOSPHERE_PI; // filter.slang's panoramaUv: +x at u = 0.5
     float theta = uv.y * ATMOSPHERE_PI;
     float3 direction = float3(cos(phi) * sin(theta), cos(theta), sin(phi) * sin(theta));
     float3 c;

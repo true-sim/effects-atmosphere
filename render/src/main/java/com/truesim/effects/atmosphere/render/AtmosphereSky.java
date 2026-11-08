@@ -204,8 +204,8 @@ public final class AtmosphereSky implements Technique {
             Pipeline program = g.computeProgram("shaders/atmosphere/sky.spv", "skyMain", AtmosphereSkyPush.BYTES,
                 hooks.specialization());
             boolean starsOn = g.setting(ATMOSPHERE.<Boolean>setting("stars"));
-            Buffer stars = g.createBuffer("atmosphere stars", Math.max(12L * color.desc().width()
-                * color.desc().height(), 16));
+            Buffer stars = starsOn ? g.createBuffer("atmosphere stars", Math.max(12L * color.desc().width()
+                * color.desc().height(), 16)) : null;
             if (starsOn) {
                 g.pass("atmosphere stars clear").write(stars, BufferAccess.TRANSFER_DST).record(ctx -> {
                     if (atmosphere.starCount() > 0) {
@@ -238,8 +238,11 @@ public final class AtmosphereSky implements Technique {
             }
             GraphBuilder.PassBuilder pass = skyPass(g, "atmosphere sky", color, depth, hooks)
                 .read(sky.skyView(), Access.SAMPLED_COMPUTE).read(tables.transmittance(), Access.SAMPLED_COMPUTE)
-                .read(tables.multipleScattering(), Access.SAMPLED_COMPUTE).read(stars, BufferAccess.STORAGE_READ);
-            pass.record(ctx -> record(ctx, program, color, depth, sky, stars));
+                .read(tables.multipleScattering(), Access.SAMPLED_COMPUTE);
+            if (starsOn) {
+                pass.read(stars, BufferAccess.STORAGE_READ);
+            }
+            pass.record(ctx -> record(ctx, program, color, depth, sky, starsOn ? stars : null));
         }
 
         private void record(PassContext ctx, Pipeline program, Image color, Image depth, SkyViewLut.Images sky,
@@ -249,11 +252,13 @@ public final class AtmosphereSky implements Technique {
                 .multipleScattering()));
             int width = ctx.regionWidth(color);
             int height = ctx.regionHeight(color);
-            push.view(view.view().address()).atmosphere(atmosphere.frameAddress()).stars(ctx.address(stars))
+            // Without a star buffer, a valid address all the same (the star field's): never read with starsOn 0
+            long starsAt = stars != null ? ctx.address(stars) : atmosphere.starsAddress();
+            push.view(view.view().address()).atmosphere(atmosphere.frameAddress()).stars(starsAt)
                 .color(ctx.storage(color)).depth(ctx.sampled(depth)).size(width | height << 16)
                 .sky(ctx.sampled(sky.skyView())).skySize(sky.skyView().desc().width()
                     | sky.skyView().desc().height() << 16).perPixel(c.perPixel() ? 1 : 0)
-                .starsOn(c.stars() && atmosphere.starCount() > 0 ? 1 : 0)
+                .starsOn(stars != null && atmosphere.starCount() > 0 ? 1 : 0)
                 .discs((c.sunDisc() ? 1 : 0) | (c.moonDisc() ? 2 : 0)).sceneUnitsPerLux((float) atmosphere.sceneUnits())
                 .minSteps(c.minSteps()).maxSteps(c.maxSteps()).stepsPerKm(1 / 3f)
                 .moonRadius((float) atmosphere.lightRadius(1)).moonRadiance((float) atmosphere.moonDiscFactor());
