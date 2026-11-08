@@ -57,6 +57,8 @@ import com.truesim.engine.scene.ShadingHookSync;
 import com.truesim.engine.render.ShadingHookValues;
 import com.truesim.effects.atmosphere.fog.AtmosphereFog;
 import com.truesim.effects.atmosphere.fog.FogRegions;
+import com.truesim.effects.atmosphere.fog.IndoorZone;
+import com.truesim.common.math.Vec3;
 import com.truesim.engine.vulkan.DisplayEncoding;
 import com.truesim.engine.vulkan.Format;
 import com.truesim.engine.vulkan.FrameSlots;
@@ -346,6 +348,51 @@ final class AtmosphereScene implements AutoCloseable {
         return node;
     }
 
+    /** The room's centre on the ground (x, floor height, z): east of the camera's start, its window facing east. */
+    static final double ROOM_X = 40;
+    static final double ROOM_Z = 25;
+
+    /** The room's floor height. */
+    static double roomFloor() {
+        double top = -1e9;
+        for (double x = -4; x <= 4; x += 0.5) {
+            for (double z = -3.5; z <= 3.5; z += 0.5) {
+                top = Math.max(top, height(ROOM_X + x, ROOM_Z + z));
+            }
+        }
+        return top + 0.1;
+    }
+
+    /**
+     * A room 6 x 3 x 5 m on the ground at ({@link #ROOM_X}, {@link #ROOM_Z}) with a window 1.6 x 1.2 m in its east wall
+     * (+x), and an indoor zone of dusty air of its own (atmosphere-fog's IndoorZone, replacing the outdoor fog, the
+     * outdoor light kept: the froxels' shadows decide where the sun reaches): light shafts through the window.
+     */
+    void room() {
+        ComponentStore<Renderable> renderables = scene.components().store(Renderable.TYPE);
+        double y = roomFloor();
+        wall(renderables, -3.2, 3.2, -0.2, 0, -2.7, 2.7, y);       // floor
+        wall(renderables, -3.2, 3.2, 3, 3.2, -2.7, 2.7, y);        // roof
+        wall(renderables, -3.2, -3, 0, 3, -2.7, 2.7, y);           // west wall
+        wall(renderables, -3, 3, 0, 3, -2.7, -2.5, y);             // north wall
+        wall(renderables, -3, 3, 0, 3, 2.5, 2.7, y);               // south wall
+        wall(renderables, 3, 3.2, 0, 1, -2.5, 2.5, y);             // east wall, below the window
+        wall(renderables, 3, 3.2, 2.2, 3, -2.5, 2.5, y);           // above it
+        wall(renderables, 3, 3.2, 1, 2.2, -2.5, -0.8, y);          // beside it
+        wall(renderables, 3, 3.2, 1, 2.2, 0.8, 2.5, y);
+        long zone = scene.create();
+        scene.setTranslation(zone, ROOM_X, y + 1.5, ROOM_Z);
+        scene.components().set(zone, IndoorZone.TYPE, IndoorZone.box(new Vec3(3, 1.5, 2.5))
+            .replacing(0.06f, new Vec3(0.9, 0.9, 0.9)).withLight(1));
+    }
+
+    /** A wall from (x0, y0, z0) to (x1, y1, z1), relative to the room's centre on its floor. */
+    private void wall(ComponentStore<Renderable> renderables, double x0, double x1, double y0, double y1, double z0,
+        double z1, double floor) {
+        node(renderables, BOX, WHITE, ROOM_X + (x0 + x1) / 2, floor + (y0 + y1) / 2, ROOM_Z + (z0 + z1) / 2, 0, 0, 0, 1,
+            (x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2);
+    }
+
     private void build() {
         ComponentStore<Renderable> renderables = scene.components().store(Renderable.TYPE);
         node(renderables, TERRAIN, GROUND, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1);
@@ -368,6 +415,7 @@ final class AtmosphereScene implements AutoCloseable {
         double px = 6;
         double pz = -18;
         node(renderables, QUAD, WATER, px, height(px, pz) + 0.25, pz, -Math.sqrt(0.5), 0, 0, Math.sqrt(0.5), 9, 7, 1);
+        room();
     }
 
     private static double[] unit(double x, double y, double z, double w) {

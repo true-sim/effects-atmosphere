@@ -9,6 +9,7 @@ import com.truesim.engine.vulkan.VulkanDevice;
 import com.truesim.engine.vulkan.VulkanInstance;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -44,33 +45,186 @@ class AtmosphereScreenshots {
             s.at(summer + 11.0 / 24);
             s.look(0, 2, 0, 40, 4, 70);
             s.load();
-            shot(s, out, "01-noon.png", summer + 11.0 / 24, 0, 2, 0, 40, 4, 70);
-            double sunset = sunAt(summer + 0.5, 1.5, false);
-            shot(s, out, "02-sunset.png", sunset, 0, 2, 0, sunAzimuth(sunset), 3, 70);
-            double belt = sunAt(summer + 0.5, -2.5, false);
-            shot(s, out, "03-earth-shadow.png", belt, 0, 1500, 0, sunAzimuth(belt) + 180, 4, 80);
-            double twilight = sunAt(summer + 0.5, -6, false);
-            shot(s, out, "04-twilight.png", twilight, 0, 2, 0, sunAzimuth(twilight), 8, 80);
-            double moonlit = moonlitNight();
-            shot(s, out, "05-night-moon.png", moonlit, 0, 2, 0, moonAzimuth(moonlit), moonAltitude(moonlit) - 8, 80);
-            double dark = moonlessNight();
-            shot(s, out, "06-night-stars.png", dark, 0, 2, 0, 180, 40, 100);
-            double afternoon = summer + 15.0 / 24;
-            shot(s, out, "07-altitude-10km.png", afternoon, 0, 10_000, 0, sunAzimuth(afternoon) + 120, -2, 75);
-            double evening = sunAt(summer + 0.5, 3, false);
-            // From orbit the lit planet sets the exposure (a sunny ground's EV), whatever share of the view is space
-            shot(s, out, "08-orbit-400km-terminator.png", evening, 0, 400_000, 0, sunAzimuth(evening) + 180, -16, 75,
-                13);
-            shot(s, out, "09-orbit-400km-day.png", afternoon, 0, 400_000, 0, sunAzimuth(afternoon) + 90, -16, 75, 13);
-            // Morning fog with the low sun's shafts through it, the house and rocks casting them
-            double morning = sunAt(summer, 6, true);
-            s.fog(0.012f, 0.03f);
-            shot(s, out, "10-fog-shafts.png", morning, 4, 2, 6, sunAzimuth(morning) - 25, 4, 70);
-            s.fog(0, 0.03f);
-            if (!"false".equals(System.getenv("TRUESIM_ATMOSPHERE_FILM"))) {
+            if (!"false".equals(System.getenv("TRUESIM_ATMOSPHERE_STILLS"))) {
+                stills(s, out, summer);
+            }
+            String wanted = System.getenv().getOrDefault("TRUESIM_ATMOSPHERE_FILMS",
+                "timelapse,sunset,aerial,ascent,moonrise,shafts,window");
+            List<String> films = List.of(wanted.split(","));
+            if (films.contains("timelapse")) {
                 film(s, Files.createDirectories(out.resolve("frames")));
             }
+            if (films.contains("sunset")) {
+                // The sun from 8 degrees up to 12 below, seen setting: the sky's colour through sunset and twilight
+                double from = sunAt(summer + 0.5, 8, false);
+                double to = sunAt(summer + 0.5, -12, false);
+                double azimuth = sunAzimuth(sunAt(summer + 0.5, 0, false));
+                film(s, out.resolve("film-sunset-twilight"), 300, (scene, t) -> {
+                    scene.at(from + (to - from) * t);
+                    scene.look(0, 2, 0, azimuth, 6, 75);
+                }, Double.NaN);
+            }
+            if (films.contains("aerial")) {
+                // The mountains 10-30 km away from 300 m up, the sun crossing the sky from morning to evening
+                double from = summer + 6.0 / 24;
+                double to = summer + 18.5 / 24;
+                film(s, out.resolve("film-aerial-perspective"), 300, (scene, t) -> {
+                    scene.at(from + (to - from) * t);
+                    scene.look(0, 300, 0, 200, -1, 60);
+                }, Double.NaN);
+            }
+            if (films.contains("ascent")) {
+                // From the ground to orbit (2 m to 400 km) in the afternoon, the view dipping with the horizon
+                double jd = summer + 15.0 / 24;
+                double azimuth = sunAzimuth(jd) + 100;
+                film(s, out.resolve("film-ascent-to-orbit"), 360, (scene, t) -> {
+                    double h = 2 * Math.pow(200_000, t);
+                    double dip = Math.toDegrees(Math.acos(6360 / (6360 + h / 1000)));
+                    scene.at(jd);
+                    scene.look(0, h, 0, azimuth, 3 - dip, 75);
+                }, Double.NaN);
+            }
+            if (films.contains("moonrise")) {
+                // A dark night: the moon rising in the east through the stars
+                double rise = moonrise();
+                double azimuth = moonAzimuth(rise + 40.0 / 1440);
+                film(s, out.resolve("film-moonrise"), 300, (scene, t) -> {
+                    scene.at(rise - 10.0 / 1440 + t * 100.0 / 1440);
+                    scene.look(0, 2, 0, azimuth, 9, 60);
+                }, Double.NaN);
+            }
+            if (films.contains("shafts")) {
+                // Morning fog, the low sun climbing behind rocks: volumetric fog's light shafts moving
+                double from = sunAt(summer, 2, true);
+                double to = sunAt(summer, 9, true);
+                double azimuth = sunAzimuth(from + (to - from) / 2) - 20;
+                s.fog(0.012f, 0.03f);
+                film(s, out.resolve("film-fog-shafts"), 300, (scene, t) -> {
+                    scene.at(from + (to - from) * t);
+                    scene.look(4, 2, 6, azimuth, 4, 70);
+                }, Double.NaN);
+                s.fog(0, 0.03f);
+            }
+            if (films.contains("window")) {
+                // Inside the room: the morning sun through its east window, shafts in the room's dusty air (its indoor
+                // zone) and the fog outside, the sun climbing and turning
+                double from = sunAt(summer, 4, true);
+                double to = sunAt(summer, 16, true);
+                double floor = AtmosphereScene.roomFloor();
+                s.fog(0.006f, 0.03f);
+                film(s, out.resolve("film-window-shafts"), 300, (scene, t) -> {
+                    scene.at(from + (to - from) * t);
+                    scene.look(AtmosphereScene.ROOM_X - 2.6, floor + 1.7, AtmosphereScene.ROOM_Z - 1.6, 70, -8, 80);
+                }, Double.NaN);
+                s.fog(0, 0.03f);
+            }
         }
+    }
+
+    /** The stills. */
+    private static void stills(AtmosphereScene s, Path out, double summer) throws Exception {
+        shot(s, out, "01-noon.png", summer + 11.0 / 24, 0, 2, 0, 40, 4, 70);
+        double sunset = sunAt(summer + 0.5, 1.5, false);
+        shot(s, out, "02-sunset.png", sunset, 0, 2, 0, sunAzimuth(sunset), 3, 70);
+        double belt = sunAt(summer + 0.5, -2.5, false);
+        shot(s, out, "03-earth-shadow.png", belt, 0, 1500, 0, sunAzimuth(belt) + 180, 4, 80);
+        double twilight = sunAt(summer + 0.5, -6, false);
+        shot(s, out, "04-twilight.png", twilight, 0, 2, 0, sunAzimuth(twilight), 8, 80);
+        double moonlit = moonlitNight();
+        shot(s, out, "05-night-moon.png", moonlit, 0, 2, 0, moonAzimuth(moonlit), moonAltitude(moonlit) - 8, 80);
+        double dark = moonlessNight();
+        shot(s, out, "06-night-stars.png", dark, 0, 2, 0, 180, 40, 100);
+        double afternoon = summer + 15.0 / 24;
+        shot(s, out, "07-altitude-10km.png", afternoon, 0, 10_000, 0, sunAzimuth(afternoon) + 120, -2, 75);
+        double evening = sunAt(summer + 0.5, 3, false);
+        // From orbit the lit planet sets the exposure (a sunny ground's EV), whatever share of the view is space
+        shot(s, out, "08-orbit-400km-terminator.png", evening, 0, 400_000, 0, sunAzimuth(evening) + 180, -16, 75, 13);
+        shot(s, out, "09-orbit-400km-day.png", afternoon, 0, 400_000, 0, sunAzimuth(afternoon) + 90, -16, 75, 13);
+        double morning = sunAt(summer, 6, true);
+        s.fog(0.012f, 0.03f);
+        shot(s, out, "10-fog-shafts.png", morning, 4, 2, 6, sunAzimuth(morning) - 25, 4, 70);
+        double window = sunAt(summer, 8, true);
+        s.fog(0.006f, 0.03f);
+        shot(s, out, "11-window-shafts.png", window, AtmosphereScene.ROOM_X - 2.6, AtmosphereScene.roomFloor() + 1.7,
+            AtmosphereScene.ROOM_Z - 1.6, 70, -8, 80);
+        s.fog(0, 0.03f);
+    }
+
+    /** What a film's frame at {@code t} (0 to 1 over the film) shows: the sky's time, the camera. */
+    private interface Scene {
+        void at(AtmosphereScene s, double t);
+    }
+
+    /**
+     * A film of {@code count} frames at 30 a second into {@code dir} ({@code f%04d.png}): exposed automatically (each
+     * frame's log-average luminance, eased with a time constant of half a second), or at {@code ev100}. Prints the
+     * largest frame-to-frame change of the displayed image's mean (second difference, of 255): flicker.
+     */
+    private static void film(AtmosphereScene s, Path dir, int count, Scene scene, double ev100) throws Exception {
+        Files.createDirectories(dir);
+        double ev = s.atmosphere.config().ev100();
+        scene.at(s, 0);
+        for (int i = 0; i < 20; i++) { // the exposure settled on the first frame first
+            s.step();
+            s.device.waitIdle();
+            ev = Double.isNaN(ev100) ? AtmosphereExposure.ev100(s.logAverageLuminance()) : ev100;
+            s.graph.settings().set(AtmosphereSky.ATMOSPHERE.<Float>setting("ev100"), (float) ev);
+        }
+        double[] means = new double[count];
+        long start = System.nanoTime();
+        int captures = s.capture.captures();
+        for (int f = 0; f < count; f++) {
+            scene.at(s, f / (count - 1.0));
+            s.step();
+            s.device.waitIdle();
+            if (Double.isNaN(ev100)) {
+                ev = AtmosphereExposure.adapt(ev, AtmosphereExposure.ev100(s.logAverageLuminance()), 1 / FPS, 0.5);
+                s.graph.settings().set(AtmosphereSky.ATMOSPHERE.<Float>setting("ev100"), (float) ev);
+            }
+            s.write(dir.resolve(String.format(Locale.ROOT, "f%04d.png", f)));
+            means[f] = meanLuma(s.displayed());
+        }
+        double flicker = 0;
+        int worst = 0;
+        for (int f = 1; f + 1 < count; f++) {
+            double d = Math.abs(means[f + 1] - 2 * means[f] + means[f - 1]) * 255;
+            if (d > flicker) {
+                flicker = d;
+                worst = f;
+            }
+        }
+        System.out.printf(Locale.ROOT, "%s: %d frames in %.1f s, %d captures; largest second difference of the mean "
+            + "%.2f of 255 (frame %d)%n", dir.getFileName(), count, (System.nanoTime() - start) / 1e9,
+            s.capture.captures() - captures, flicker, worst);
+    }
+
+    private static double meanLuma(float[][] rgb) {
+        double sum = 0;
+        for (int i = 0; i < rgb[0].length; i++) {
+            sum += 0.2126 * clamp(rgb[0][i]) + 0.7152 * clamp(rgb[1][i]) + 0.0722 * clamp(rgb[2][i]);
+        }
+        return sum / rgb[0].length;
+    }
+
+    private static double clamp(float v) {
+        return Float.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+    }
+
+    /** A night of autumn 2026 when the moon rises, gibbous, with the sun below -20 degrees for the next 100 minutes. */
+    private static double moonrise() {
+        double from = AstroTime.julianDay(2026, 9, 1, 0, 0, 0);
+        double step = 1.0 / 1440;
+        double previous = sun(from).moon().altitude();
+        for (double jd = from + step; jd < from + 120; jd += step) {
+            Ephemeris e = sun(jd);
+            double now = e.moon().altitude();
+            if (previous < 0 && now >= 0 && e.sun().altitude() < -20 && sun(jd + 100.0 / 1440).sun().altitude() < -18
+                && e.moonPhase().illuminatedFraction() > 0.6) {
+                return jd;
+            }
+            previous = now;
+        }
+        throw new IllegalStateException("No moonrise");
     }
 
     private static Gpu gpu(VulkanInstance instance) {
