@@ -45,6 +45,7 @@ public final class AtmosphereSync implements AutoCloseable {
     private AssetRef<StarCatalogue> stars;
     private boolean starsSet;
     private StarsConfig followed;
+    private boolean updated;
 
     /**
      * Follows the sky components of {@code node} in {@code scene}, its star catalogue loaded into {@code cache}
@@ -85,6 +86,7 @@ public final class AtmosphereSync implements AutoCloseable {
         double jd = time != null ? time.julianDayAt(gameSeconds) : 2451545.0;
         sky.update(jd);
         atmosphere.update(sky, x, y, z);
+        updated = true;
     }
 
     /** The catalogue the settings name: acquired, set once loaded, the one before released. */
@@ -124,9 +126,9 @@ public final class AtmosphereSync implements AutoCloseable {
         }
     }
 
-    /** Whether the star catalogue the settings name is loaded and set (or none is named). */
+    /** Whether the star catalogue the settings name is loaded and set (or none is named), once updated. */
     public boolean starsReady() {
-        return stars == null || starsSet;
+        return updated && (stars == null || starsSet);
     }
 
     @Override

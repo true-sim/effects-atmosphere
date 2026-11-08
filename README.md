@@ -6,9 +6,10 @@ the scene's asset system, and the night sky's airglow and Milky Way. The modules
 own repositories (build-logic, common-math, scene), so a dedicated server, a tool or a test computes the same sky as
 the game.
 
-The render techniques come as plugins over the engine's generic hooks: the first, `atmosphere-fog`, is fog as a media
-shading hook (height fog, fog volumes, indoor zones); the others (Hillaire 2020 atmosphere LUTs, sky capture, aerial
-perspective, froxel fog) follow. The design, the tiers
+The render techniques come as plugins over the engine's generic hooks: `atmosphere-fog` is fog as a media shading
+hook (height fog, fog volumes, indoor zones); `atmosphere-render` draws the sky (the Hillaire 2020 atmosphere, sky
+capture into the engine's environment, aerial perspective, the sun, the moon and the night sky) and the fog in froxels
+with every light's shadows. The design, the tiers
 and the plan: [docs/design.md](docs/design.md); the full design report: [docs/volumetrics-design.md](docs/volumetrics-design.md).
 Weather and clouds live in [true-sim/effects-weather](https://github.com/true-sim/effects-weather), which builds on this.
 
@@ -16,6 +17,7 @@ Weather and clouds live in [true-sim/effects-weather](https://github.com/true-si
 |---|---|
 | `atmosphere-ephemeris` | Time scales (Julian days, ΔT), the sun (Meeus ch. 25) and the moon (Meeus ch. 47, ELP-2000/82 truncated), the moon's phase, bright limb and illumination, topocentric parallax at any altitude, refraction, sidereal time, precession, nutation and aberration for star places, the galactic frame, photometry in lux. JDK and common-math only. |
 | `atmosphere-fog` | Fog as the engine's media shading hook `atmosphere.fog`: exponential height fog, fog volumes (`FogVolume`) and indoor zones (`IndoorZone`) from scene components, integrated along every view ray through the regions it crosses, so the air outside a window is fogged up to the glass and the room behind it stays clear ([#4](https://github.com/true-sim/effects-atmosphere/issues/4)). Engine 0.192.0. |
+| `atmosphere-render` | The atmosphere drawn ([below](#the-atmosphere-drawn)): Hillaire 2020's transmittance, multiple-scattering, sky-view and aerial-perspective tables; the sky (`render.sky`: atmosphere or gradient) with the sun's and the moon's discs, stars, airglow and the Milky Way; aerial perspective as the media hook `atmosphere.aerialPerspective`; the sky captured into the engine's `Environment` (environment light, reflections, probes); the sun and the moon as directional lights; volumetric fog in froxels over `atmosphere-fog` (`render.fog`); quality presets and automatic exposure. Engine 0.192.0. |
 | `atmosphere-sky` | The star catalogue as a scene asset (HYG v4.1, 15,598 stars to magnitude 7, CC BY-SA 4.0), star colours from B−V, star places for a date, procedural stars, airglow and Milky Way parameters, the sky's scene components (D46) and quality presets. |
 
 ```java
@@ -52,11 +54,86 @@ scene.components().set(hollow, FogVolume.TYPE, FogVolume.ellipsoid(new Vec3(20, 
   nodes. A view takes at most `atmosphere.fog.maxVolumes` and `atmosphere.fog.maxZones` (the nearest), none farther than
   `atmosphere.fog.cullDistance` (`FogSettings`).
 - **Light:** an isotropic ambient radiance (the sky's) and the sun's illuminance through a Henyey-Greenstein phase
-  function. Known approximation: the sun's shadows are not in the fog (no light shafts); indoor zones stand in for them
-  where the outdoor light does not reach. The engine's reference path tracer takes no media (its README).
+  function (`fog.lighting(atmosphere)`: the atmosphere's sun at the camera and its sky's mean radiance). With
+  froxels (`fog.froxels(new VolumetricFog(atmosphere, view))`, atmosphere-render) the fog within their reach is lit by
+  every light of the view's light list with its shadows (light shafts) and the hook continues from their end; without
+  them the sun's shadows are not in the fog, and indoor zones stand in for them where the outdoor light does not
+  reach. The engine's reference path tracer takes no media (its README).
 - Tests: `FogVolumesTest` (GPU, against closed-form values: a window seen from outside and from inside, with and without
   the zone; in-scattering; a replacing zone; caps; an ellipsoid and a turned, scaled box), `FogRegionsTest`.
   Pictures: `FogScreenshots` (`TRUESIM_SCREENSHOTS=true`, `-Pscreenshots=<directory>`).
+
+## The atmosphere drawn
+
+```java
+Atmosphere atmosphere = new Atmosphere(device, slots, graph.settings());   // render.sky.atmosphere.* settings
+AtmosphereSync sky = new AtmosphereSync(scene, environmentNode, cache, paths, atmosphere); // SkyComponents, catalogue
+Environment environment = Environment.uniform("sky", 0, 0, 0);
+port.add(new SkyCapture(atmosphere, environment, textures))               // the sky into the environment
+    .add(new EnvironmentLighting(environment, view))                       // environment light and reflections
+    .add(new AtmosphereSky(atmosphere, view))                              // the sky behind the scene (render.sky)
+    .add(new AerialPerspective(atmosphere, view))                          // the media hook on every shaded point
+    .add(new AtmosphereFog(view, regions).froxels(new VolumetricFog(atmosphere, view)).lighting(atmosphere));
+AtmosphereQuality.apply(graph.settings(), Quality.HIGH);                  // presets into the game's layer
+// every frame, after the scene's update:
+sky.update(gameSeconds, cameraX, cameraY, cameraZ);                        // ephemeris, stars, the frame's atmosphere
+atmosphere.light(lights, 0, 1);                                            // the sun and the moon as directional lights
+```
+
+- **The atmosphere** (Hillaire 2020, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique", EGSR;
+  implemented from the paper, Bruneton 2017's transmittance parameterisation): Rayleigh, Mie (Cornette-Shanks phase)
+  and an ozone tent, Earth by default (Hillaire's Table 1), every coefficient a setting. The transmittance (256 x 64)
+  and multiple-scattering (32 x 32, 64 directions a texel: Ψ_ms = L₂ / (1 − f_ms)) tables are made when the media
+  change; the sky-view table (192 x 108, the paper's latitude mapping, all the way around so the sun and the moon share
+  it) and the aerial perspective volume every frame. Rays take 4 to 32 steps growing quadratically along them (finest
+  where the air is densest; the paper's uniform steps needed 8 times as many for the same error at the zenith).
+  From above the atmosphere (and with `perPixel`, the paper's high-quality path) every sky pixel integrates its ray:
+  the planet is lit below the horizon, so orbit works.
+- **Aerial perspective:** a volume laid around the camera by the sky-view table's directions and squared distance
+  slices (64 x 32 x 32 over 100 km, further from high up), not over a frustum as in the paper: one volume serves every
+  view and eye at the camera and points off screen (reflections, probe hits). The media hook `atmosphere.aerialPerspective`
+  runs before `atmosphere.fog` (far media first). Its rays do not stop at the planet's sphere: the scene's geometry ends
+  them (terrain above the sphere at the horizon).
+- **Sun, moon, night:** directions from atmosphere-sky's ephemeris (the world: +x east, +y up, -z north); the sun's
+  disc limb darkened (Hillaire 2016's power law, normalised so the disc gives its illuminance in every channel), the
+  moon's disc lit by the sun with Lommel-Seeliger's law and normalised to the ephemeris' illuminance (its phase), a
+  second light of the scattering at night (a moonlit sky); stars splatted per pixel in fixed point (energy kept at any
+  resolution), airglow (van Rhijn) and the analytic Milky Way, all through the atmosphere's transmittance; stars are
+  left out while the sun is up (`starsBelowSunAltitude`).
+- **Units:** luminance in cd/m² (illuminance in lux) times 1 / (1.2 · 2^EV100) (`render.sky.atmosphere.ev100`, Lagarde
+  and de Rousiers 2014) is scene color, before the engine's `display.exposure`; the sun and the moon reach `Lights` in
+  the same units, transmitted to the camera. `AtmosphereExposure` gives an EV100 from a scene's log-average luminance
+  (Krawczyk et al. 2005's key, so nights stay dark) and eases a camera towards it.
+- **Sky capture** (`SkyCapture`): the sky without the discs (the lights) and stars as a panorama in a dynamic storage
+  texture, handed to the `Environment` (`setPanorama`) the frame after: diffuse harmonics, GGX and sheen cubes, probe and
+  cascade misses. Again only when a light moved `captureAngle` or changed `captureChange`, the camera climbed
+  `captureAltitude`, the media or the exposure changed.
+- **Tiers** (`render.sky`): `atmosphere` (default), `gradient` (two colours by height: no tables), `off`;
+  `render.fog`: `froxel` (default) or `analytic` (the fog hook alone). Presets (`AtmosphereQuality`): LOW gradient
+  without aerial perspective; MEDIUM smaller per-frame tables; HIGH the paper's sizes; ULTRA every sky pixel's ray,
+  finer aerial perspective, a 1024 capture. Every value stays a setting.
+- **Volumetric fog** (`VolumetricFog`; Wronski 2014, Hillaire 2015): atmosphere-fog's own media (`fogMediumAt`: height
+  fog, fog volumes, indoor zones) in froxels over the view's frustum (12-pixel tiles, 64 slices from 0.5 m to 300 m,
+  exponential), lit by every light of the view's light list after its shadow (the sun's cascades: shafts) and the
+  sky's mean radiance, integrated front to back; the fog hook reads them up to their reach and continues as before.
+  No temporal reprojection yet (froxel centres, no jitter): the follow-up.
+- **For other libraries (clouds):** `Atmosphere` (sun and moon directions, illuminance outside the atmosphere and at
+  the camera, `transmittance(light, altitudeKm)`, `skyAmbient`, `sceneUnits`, `frameAddress`), the requests
+  `AtmosphereLuts` and `SkyViewLut` (the tables and the volume, shared in the frame), and the Slang module
+  `atmosphere/atmosphere.slang` (`AtmosphereFrame`, `medium`, `transmittance`, `transmittanceToLight` with the planet's
+  shadow, `transmittanceToSpace`, `integrate`, `segment`, `skyFrame`/`skyViewUv` to read the sky-view table and the
+  aerial perspective volume, the phase functions). See docs/design.md, "The atmosphere for clouds".
+- **Tests** (GPU, validated; on CI's lavapipe): the sky at the zenith and the horizon against an independent
+  path-traced reference of the same media (`ReferenceAtmosphere`, every order, no tables): within 3 % of luminance,
+  the blue of the horizon 7-10 % under it (the multiple-scattering approximation); single scattering within 4 %; the
+  setting sun's red over green as the reference has it; the earth's shadow and night; space black and the planet from
+  400 km within 9 %; a distant object's aerial perspective against the reference, and unchanged with the hook off; a
+  star's and the moon's illuminance through the atmosphere, the moon lit towards the sun; environment light and a
+  mirror's reflection from the captured sky, and nothing without the capture; captures only on change; the froxels
+  equal to the hook in the open and shadowed under a roof; the scene's components, the catalogue as an asset, and an
+  allocation-free frame.
+
+@@BENCH@@
 
 ## Data and licences
 

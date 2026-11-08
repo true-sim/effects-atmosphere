@@ -58,8 +58,10 @@ class AtmosphereScreenshots {
             double afternoon = summer + 15.0 / 24;
             shot(s, out, "07-altitude-10km.png", afternoon, 0, 10_000, 0, sunAzimuth(afternoon) + 120, -2, 75);
             double evening = sunAt(summer + 0.5, 3, false);
-            shot(s, out, "08-orbit-400km-terminator.png", evening, 0, 400_000, 0, sunAzimuth(evening) + 180, -16, 75);
-            shot(s, out, "09-orbit-400km-day.png", afternoon, 0, 400_000, 0, sunAzimuth(afternoon) + 90, -16, 75);
+            // From orbit the lit planet sets the exposure (a sunny ground's EV), whatever share of the view is space
+            shot(s, out, "08-orbit-400km-terminator.png", evening, 0, 400_000, 0, sunAzimuth(evening) + 180, -16, 75,
+                13);
+            shot(s, out, "09-orbit-400km-day.png", afternoon, 0, 400_000, 0, sunAzimuth(afternoon) + 90, -16, 75, 13);
             // Morning fog with the low sun's shafts through it, the house and rocks casting them
             double morning = sunAt(summer, 6, true);
             s.fog(0.012f, 0.03f);
@@ -80,11 +82,21 @@ class AtmosphereScreenshots {
     /** A still: the sky at {@code jd}, the camera there, exposed automatically, written as {@code name}. */
     private static void shot(AtmosphereScene s, Path out, String name, double jd, double x, double y, double z,
         double azimuth, double elevation, double fov) throws Exception {
+        shot(s, out, name, jd, x, y, z, azimuth, elevation, fov, Double.NaN);
+    }
+
+    /** A still exposed at {@code ev100} (NaN: automatically). */
+    private static void shot(AtmosphereScene s, Path out, String name, double jd, double x, double y, double z,
+        double azimuth, double elevation, double fov, double ev100) throws Exception {
         s.at(jd);
         s.look(x, y, z, azimuth, elevation, fov);
         s.settle(3);
         for (int i = 0; i < 4; i++) {
-            expose(s, s.logAverageLuminance());
+            if (Double.isNaN(ev100)) {
+                expose(s, s.logAverageLuminance());
+            } else {
+                s.graph.settings().set(AtmosphereSky.ATMOSPHERE.<Float>setting("ev100"), (float) ev100);
+            }
             s.settle(3);
         }
         s.write(out.resolve(name));
@@ -98,7 +110,7 @@ class AtmosphereScreenshots {
     }
 
     /**
-     * The film: from 40 minutes before sunrise to the end of nautical twilight on 2026-09-21 (frames spaced so the sun
+     * The film: from civil dawn (the sun 6 degrees below) to a starry night on 2026-09-21 (frames spaced so the sun
      * moves slowly near the horizon and fast at midday), the camera turning with the sun, exposure adapting from
      * each frame's luminance with a time constant of half a second.
      */
@@ -210,8 +222,8 @@ class AtmosphereScreenshots {
         throw new IllegalStateException("No moonless night");
     }
 
-    /** The end of the film's day: the sun at -15 degrees after setting. */
+    /** The end of the film's day: the sun at -21 degrees after setting, a starry night. */
     private static double moonOrNight(double day) {
-        return sunAt(day + 0.5, -15, false);
+        return sunAt(day + 0.5, -21, false);
     }
 }
