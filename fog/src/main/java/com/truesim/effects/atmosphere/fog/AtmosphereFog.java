@@ -53,10 +53,14 @@ public final class AtmosphereFog implements Technique, AutoCloseable {
     public static final Id<AtmosphereFog> ID = Id.of("truesim.atmosphere.fog", AtmosphereFog.class);
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
     private static final ValueLayout.OfLong I64 = ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
     private static final int REGION = FogConstants.FOG_REGION_BYTES;
-    /** The record's {@code regions} address: its last 8 bytes (the generator gives addresses no field constant). */
-    private static final long REGIONS_OFFSET = AtmosphereFogParameters.BYTES - 8;
+    /**
+     * The record's {@code regions} address: the 8 bytes before {@code froxelFar} (the generator gives addresses no field
+     * constant).
+     */
+    public static final long REGIONS_OFFSET = AtmosphereFogParameters.FROXEL_FAR.offset() - 8;
 
     private final SceneView view;
     private final FogRegions regions;
@@ -69,6 +73,62 @@ public final class AtmosphereFog implements Technique, AutoCloseable {
     private int[] chosen = new int[0];
     private double[] distances = new double[0];
     private int chosenCount;
+    private FogFroxels froxels;
+    private FogLighting lighting;
+    private final float[] sun = new float[3];
+    private final float[] sunLight = new float[3];
+    private final float[] ambient = new float[3];
+
+    /**
+     * What adds froxels to a view's fog (atmosphere-render's {@code VolumetricFog}): the fog integrated in the view's
+     * frustum with every light and its shadows, which the hook reads up to their reach and continues from.
+     */
+    public interface FogFroxels {
+
+        /**
+         * Builds the froxels for the view building in {@code g}: the images shading samples (none: no froxels this
+         * build). Called from the fog's build, which comes before the view's shading.
+         */
+        List<com.truesim.engine.graph.Image> build(GraphBuilder g, AtmosphereFog fog);
+
+        /**
+         * Writes the froxel fields of the fog's record ({@code froxels}, {@code froxelFar}, ...) at {@code offset} of
+         * {@code into}, after the fog has written all of its own (the record complete: froxels may copy it).
+         */
+        void write(PassContext ctx, MemorySegment into, long offset);
+    }
+
+    /**
+     * What lights the fog in place of the values content gives (atmosphere-render's {@code Atmosphere}): the sun's
+     * direction (towards it) and illuminance, and the sky's isotropic radiance, each frame.
+     */
+    public interface FogLighting {
+
+        /** Fills the sun's direction and illuminance and the ambient radiance (scene units). */
+        void light(float[] sunDirection, float[] sunIlluminance, float[] ambient);
+    }
+
+    /** Takes froxels from {@code froxels} from the next build (null: none). */
+    public AtmosphereFog froxels(FogFroxels froxels) {
+        this.froxels = froxels;
+        return this;
+    }
+
+    /** Lights the fog by {@code lighting} from the next frame (null: as content says). */
+    public AtmosphereFog lighting(FogLighting lighting) {
+        this.lighting = lighting;
+        return this;
+    }
+
+    /** The view it fogs. */
+    public SceneView view() {
+        return view;
+    }
+
+    /** The settings the fog was last built with. */
+    public EngineSettings settings() {
+        return settings;
+    }
 
     /** The fog of {@code view}, with the regions of {@code regions}. */
     public AtmosphereFog(SceneView view, FogRegions regions) {
@@ -118,7 +178,9 @@ public final class AtmosphereFog implements Technique, AutoCloseable {
             buffer = FrameBuffer.create(device, (long) REGION * capacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                 | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, view.view().renderer().scene().frameSlots());
         }
-        ShadingHooks.of(device).add(g, HOOK, new ShadingHookSource() {
+        List<com.truesim.engine.graph.Image> froxelImages = froxels == null ? List.of() : froxels.build(g, this);
+        com.truesim.engine.render.ShadingHookInputs.Set inputs = ShadingHooks.of(device).add(g, HOOK,
+            new ShadingHookSource() {
             @Override
             public int bytes() {
                 return AtmosphereFogParameters.BYTES;
@@ -138,8 +200,26 @@ public final class AtmosphereFog implements Technique, AutoCloseable {
                     settings.get(FogSettings.REGIONS_PER_RAY));
                 into.set(I32, offset + AtmosphereFogParameters.STEPS.offset(), settings.get(FogSettings.STEPS));
                 into.set(I64, offset + REGIONS_OFFSET, buffer.deviceAddress());
+                if (lighting != null) {
+                    lighting.light(sun, sunLight, ambient);
+                    put(into, offset + AtmosphereFogParameters.SUN_DIRECTION.offset(), sun);
+                    put(into, offset + AtmosphereFogParameters.SUN_ILLUMINANCE.offset(), sunLight);
+                    put(into, offset + AtmosphereFogParameters.AMBIENT.offset(), ambient);
+                }
+                if (froxels != null) {
+                    froxels.write(ctx, into, offset);
+                }
             }
         });
+        for (int i = 0; i < froxelImages.size(); i++) {
+            inputs.sample(froxelImages.get(i));
+        }
+    }
+
+    private static void put(MemorySegment into, long offset, float[] v) {
+        into.set(F32, offset, v[0]);
+        into.set(F32, offset + 4, v[1]);
+        into.set(F32, offset + 8, v[2]);
     }
 
     /** Chooses the regions nearest the camera, writes them camera-relative; returns how many. */

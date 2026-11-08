@@ -30,3 +30,19 @@ To rebuild the subset: download the file above into an empty folder, check its S
   JCGT 2(2), 2013: the CIE 1931 fit used for star colours.
 - K. Krisciunas, B. E. Schaefer, *A model of the brightness of moonlight*, PASP 103 (1991); C. W. Allen,
   *Astrophysical Quantities*: the moon's and the stars' photometry, airglow brightness.
+- S. Hillaire, *A Scalable and Production Ready Sky and Atmosphere Rendering Technique*, Computer Graphics Forum 39(4),
+  EGSR 2020: the transmittance, multiple-scattering, sky-view and aerial-perspective tables, Earth's media (atmosphere-render).
+- E. Bruneton, F. Neyret, *Precomputed Atmospheric Scattering*, EGSR 2008; E. Bruneton, *Precomputed Atmospheric
+  Scattering: a New Implementation* (2017): the transmittance table's parameterisation.
+- W. M. Cornette, J. G. Shanks, *Physically reasonable analytic expression for the single-scattering phase function*,
+  Applied Optics 31(16), 1992: the Mie phase function.
+- S. Hillaire, *Physically Based Sky, Atmosphere and Cloud Rendering in Frostbite*, SIGGRAPH 2016 course: the sun's limb
+  darkening; *Physically Based and Unified Volumetric Rendering in Frostbite*, SIGGRAPH 2015: energy-conserving
+  integration, froxels.
+- B. Wronski, *Volumetric Fog: Unified Compute Shader Based Solution to Atmospheric Scattering*, SIGGRAPH 2014: froxels.
+- S. Lagarde, C. de Rousiers, *Moving Frostbite to Physically Based Rendering*, SIGGRAPH 2014 course: EV100 exposure.
+- G. Krawczyk, K. Myszkowski, H.-P. Seidel, *Lightness Perception in Tone Reproduction for High Dynamic Range Images*,
+  Eurographics 2005: the key value of automatic exposure.
+- M. Minnaert / Lommel-Seeliger law (as in B. Hapke, *Theory of Reflectance and Emittance Spectroscopy*): the moon's disc.
+- J. Novák et al., *Monte Carlo Methods for Volumetric Light Transport Simulation*, Eurographics STAR 2018: the
+  reference path tracer's delta tracking (tests).
