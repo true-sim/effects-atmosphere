@@ -104,7 +104,8 @@ The sky drawn (stages V1, V2, V9's night sky and V3's froxel core of the report'
 - **Volumetric fog (V3 core).** `VolumetricFog` over atmosphere-fog: one medium (its `fogMediumAt`) and one hook (it
   reads the froxels up to their reach, then integrates on as before), every light of the view's light list with its
   shadows (`lightIrradiance` of engine-render's lights module), the sky's mean radiance from the sky-view table (read
-  back for the CPU: `Atmosphere.skyAmbient`). Not yet: temporal reprojection and jitter (§8.4), tile culling of fog
+  back for the CPU: `Atmosphere.skyAmbient`), jittered within each froxel and kept over frames by reprojection (§8.4;
+or several samples a frame). Not yet: tile culling of fog
   regions (every region is tested per froxel; the caps bound it), particles injecting media.
 
 ### The atmosphere for clouds (effects-weather)
@@ -173,7 +174,7 @@ by the engine's owners.
 | A new `Environment` source rendered by a technique (a cube re-filtered when it changes, time-sliced) | sky capture → diffuse SH, specular cube, probe misses | used as is: a dynamic storage texture as the panorama (`SkyCapture`); a declared GPU source and time-slicing are follow-ups |
 | CPU → GPU updates of a persistent buffer each frame or on change (structured data, a few hundred KB) | star field (15.6 k × 8 floats), sun and moon parameters | yes: `FrameBuffer` (one bulk `put` when the stars move) |
 | CPU → GPU region updates of persistent 2D textures (partial, budgeted) | Milky Way or star textures streamed at load; weather maps (effects-weather) | partial: `graph.Texture` is a persistent 2D image views render into, filled once from `float[]`; region updates not found |
-| Persistent 3D images written by compute, kept across frames, with history | aerial-perspective volume, froxel fog and its history | transient 3D images used (`g.create` with `volume`); persistent images are 2D only, histories for the froxels' temporal pass to check |
+| Persistent 3D images written by compute, kept across frames, with history | aerial-perspective volume, froxel fog and its history | transient 3D images used (`g.create` with `volume`); persistent images are 2D only; a history of 3D images keeps the froxels over frames (`VolumetricFog`) |
 | A shading hook to apply participating media at a surface's depth (opaque apply pass, and a helper for transparent and particle shaders) | fog and aerial perspective applied once, last | yes: media hooks (`IMediaHook`), used by `atmosphere.aerialPerspective` and `atmosphere.fog` |
 | Per-light transmittance in the shadow table | cloud shadows on the sun (effects-weather), atmosphere transmittance | not present (#120 is rebuilding shadows as data) |
 | Directional lights driven by data each frame | sun and moon colour and direction | yes (`Lights`) |

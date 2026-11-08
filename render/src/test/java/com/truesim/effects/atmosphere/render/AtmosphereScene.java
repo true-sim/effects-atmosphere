@@ -48,6 +48,7 @@ import com.truesim.engine.render.SceneView;
 import com.truesim.engine.render.ScreenSpaceReflections;
 import com.truesim.engine.render.Textures;
 import com.truesim.engine.render.ViewOptions;
+import com.truesim.engine.render.shadows.ShadowSettings;
 import com.truesim.engine.render.shadows.Shadows;
 import com.truesim.engine.render.testing.TestMeshes;
 import com.truesim.engine.scene.SceneResources;
@@ -154,6 +155,7 @@ final class AtmosphereScene implements AutoCloseable {
         lights = new Lights(device, 4, 8, slots);
         graph = new FrameGraph(device, slots);
         AtmosphereQuality.apply(graph.settings(), quality);
+        graph.settings().set(ShadowSettings.CASCADE_LAMBDA, 0.95f);
         graph.settings().set(DisplayTransform.EXPOSURE, 1f);
         DisplayTransform.curve(graph.settings(), DisplayTransform.Curve.ACES);
         sync = new SceneSync(resources, scene, gpu);
@@ -167,7 +169,11 @@ final class AtmosphereScene implements AutoCloseable {
         capture = new SkyCapture(atmosphere, environment, textures);
         lights.directional(0, 0, -1, 0, 0, 0, 0);
         lights.directional(1, 0, -1, 0, 0, 0, 0);
-        lights.shadow(0, ShadowSpec.cascades(3, 2048, 400));
+        // The sun's cascades: 4096 texels each, the practical splits nearly logarithmic (0.95): through a 100-degree
+        // view in the room, the default (0.75) made the first cascade reach 35 m, 8 cm texels on its walls, and the
+        // sun's patches blocky; this makes it 8 m, 1 cm texels, the penumbrae of the sun's half degree (its softness,
+        // which Atmosphere.light gives it) a few texels wide.
+        lights.shadow(0, ShadowSpec.cascades(3, 4096, 400));
         lights.setCount(2);
         if (landscape) {
             build();

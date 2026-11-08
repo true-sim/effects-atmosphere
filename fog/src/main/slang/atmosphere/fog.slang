@@ -67,6 +67,13 @@ public struct AtmosphereFogParameters
     public float4 froxelX = float4(0, 0, 0, 0);    // clip x of a camera-relative point (x, y, z, 1): the grid's
     public float4 froxelY = float4(0, 0, 0, 0);    // view-projection, by rows (x, y and w)
     public float4 froxelW = float4(0, 0, 0, 0);
+    // The grid's last frame (its temporal accumulation): that frame's view-projection rows (x, y and w) taking a point
+    // relative to this frame's camera, and where this frame's camera is from last frame's (xyz; w: 1 when there was
+    // one, 0 otherwise)
+    public float4 froxelLastX = float4(0, 0, 0, 0);
+    public float4 froxelLastY = float4(0, 0, 0, 0);
+    public float4 froxelLastW = float4(0, 0, 0, 0);
+    public float4 froxelLastCamera = float4(0, 0, 0, 0);
 };
 
 /** A region as the technique writes it (FogRegions, AtmosphereFog), read a field at a time. */

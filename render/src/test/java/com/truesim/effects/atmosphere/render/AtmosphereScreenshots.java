@@ -49,7 +49,7 @@ class AtmosphereScreenshots {
                 stills(s, out, summer);
             }
             String wanted = System.getenv().getOrDefault("TRUESIM_ATMOSPHERE_FILMS",
-                "timelapse,sunset,aerial,ascent,moonrise,shafts,window");
+                "timelapse,sunset,aerial,ascent,moonrise,shafts,window,wall");
             List<String> films = List.of(wanted.split(","));
             if (films.contains("timelapse")) {
                 film(s, Files.createDirectories(out.resolve("frames")));
@@ -118,7 +118,46 @@ class AtmosphereScreenshots {
                 }, Double.NaN);
                 s.fog(0, 0.03f);
             }
+            if (films.contains("wall")) {
+                // Close up: the sun's patch on the room's wall as the sun climbs from 7 to 9 degrees, slowly (its
+                // edges' penumbra, and whether they step or crawl as the shadow map's texels turn with the sun)
+                double from = sunAt(summer, 7, true);
+                double to = sunAt(summer, 9, true);
+                double[] patch = windowPatch(from + (to - from) / 2);
+                double x = AtmosphereScene.ROOM_X + 0.3;
+                double y = AtmosphereScene.roomFloor() + 1.3;
+                double z = AtmosphereScene.ROOM_Z - 0.2;
+                double azimuth = Math.toDegrees(Math.atan2(patch[0] - x, z - patch[2]));
+                double elevation = Math.toDegrees(Math.atan2(patch[1] - y, Math.hypot(patch[0] - x, patch[2] - z)));
+                s.fog(0.006f, 0.03f);
+                s.at(from);
+                s.look(x, y, z, azimuth, elevation, 44);
+                s.settle(3);
+                film(s, out.resolve("film-wall-patch"), 300, (scene, t) -> {
+                    scene.at(from + (to - from) * t);
+                    scene.look(x, y, z, azimuth, elevation, 44);
+                }, AtmosphereExposure.ev100(s.logAverageLuminance()));
+                s.fog(0, 0.03f);
+            }
         }
+    }
+
+    /**
+     * Where the sun at {@code jd} lights the room's far walls through the middle of its window (1.6 m up in the east
+     * wall): the world position on the south or west wall.
+     */
+    private static double[] windowPatch(double jd) {
+        Ephemeris e = sun(jd);
+        double altitude = Math.toRadians(e.sun().altitude());
+        double azimuth = Math.toRadians(e.sun().azimuth());
+        double sx = Math.sin(azimuth) * Math.cos(altitude); // towards the sun
+        double sy = Math.sin(altitude);
+        double sz = -Math.cos(azimuth) * Math.cos(altitude);
+        double toWest = 6 / sx; // from the window (x = 3) to the west wall (x = -3)
+        double toSouth = sz < 0 ? 2.5 / -sz : Double.MAX_VALUE;
+        double t = Math.min(toWest, toSouth);
+        return new double[] {AtmosphereScene.ROOM_X + 3 - sx * t, AtmosphereScene.roomFloor() + 1.6 - sy * t,
+            AtmosphereScene.ROOM_Z - sz * t};
     }
 
     /** The stills. */
