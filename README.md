@@ -133,7 +133,28 @@ atmosphere.light(lights, 0, 1);                                            // th
   equal to the hook in the open and shadowed under a roof; the scene's components, the catalogue as an asset, and an
   allocation-free frame.
 
-@@BENCH@@
+### What it costs
+
+`AtmosphereBenchmark` (`TRUESIM_BENCHMARK=true`; RX 9070 XT, 1920 x 1080, the landscape of the screenshots: a 60 km
+terrain, rocks, the sun's cascades, ambient occlusion, reflections; HIGH unless named; medians of 240 frames after
+120, from the graph's per-pass timestamps, JaCoCo off; 2026-11-08):
+
+| Pass | GPU |
+|---|---|
+| transmittance + multiple-scattering tables, when the media change (else skipped) | 0.003 + 0.060 ms |
+| sky-view table | 0.035 ms (0.016 at night: one light) |
+| aerial perspective volume (64 x 32 x 32) | 0.067 ms (MEDIUM 32 x 16 x 16: 0.038; ULTRA 128 x 64 x 48: 0.102) |
+| sky (sky-view, discs, stars, airglow, Milky Way, media hooks) | 0.081 ms by day, 0.143 at night with 8,920 stars; per pixel (ULTRA): 1.18 ms |
+| stars: clearing the per-pixel buffer, splatting | 0.011 + 0.005 ms |
+| gradient sky (LOW) | 0.060 ms |
+| sky capture (512 x 256), when the sky changed | 0.009 ms, plus the engine's environment filtering 0.74 ms |
+| fog: sky ambient, froxel light (160 x 90 x 64, every light, cascaded shadows), integration | 0.002 + 0.043 + 0.021 ms |
+
+A still sun costs the atmosphere about 0.23 ms a frame at HIGH (0.14 ms at LOW, 1.38 ms at ULTRA); a moving sun adds a
+capture and the environment's filtering (0.75 ms) in each frame it moved more than `captureAngle` (0.25 degrees).
+The aerial perspective hook costs the shading little: frames with it off took 2.111 against 2.126 ms (one run; frame
+times vary by about 0.2 ms between runs). The design's estimate for the atmosphere was 0.15-0.25 ms; for froxel fog
+0.3-0.8 ms (this grid's 0.066 ms has no temporal pass yet).
 
 ## Data and licences
 

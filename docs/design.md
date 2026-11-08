@@ -147,7 +147,7 @@ Costs: CPU costs are measured here; GPU costs of what is built are measured (`At
 | Stars (`StarsConfig.Source`) | **catalogue** (HYG, proper motion, precession, colours) · **procedural** (no data file) · **texture** (a sky map; not drawn yet) · off | CPU 0.8 ms per update of 15.6 k stars, about once a game hour; GPU: splat 0.005 ms + clearing the per-pixel buffer 0.011 ms (1080p) · same · - · 0 |
 | Airglow | van Rhijn layer · off | per-pixel term in the sky pass, < 0.01 ms est. |
 | Milky Way | analytic band · texture · off | < 0.01 ms est. · one texture fetch |
-| Aerial perspective | volume about the camera (64 x 32 x 32, built) · analytic height fog · off | 0.068 ms for the volume (shared by views) + about 0.2 ms in the shading's hook at 1080p (measured: frame 2.35 against 2.06 ms without) |
+| Aerial perspective | volume about the camera (64 x 32 x 32, built) · analytic height fog · off | 0.067 ms for the volume (shared by views); the hook in the shading within run-to-run noise (frame 2.126 against 2.111 ms without) |
 | Volumetric fog (`render.fog`) | **froxel** (built: 160 x 90 x 64, every light, shadows) · **raymarch** (HQ, ray-traced shadows; later) · **analytic** (atmosphere-fog's hook, built) · off | 0.07 ms (light 0.043, integration 0.021, sky ambient 0.002) · 1–3 ms est. · in the shading |
 | Light shafts (`render.fog.shafts`) | epipolar (Engelhardt–Dachsbacher) · screen-space radial blur (stylised, labelled, off by default) · off | 0.2–0.4 ms est. · ≈ 0.1 ms est. |
 | Colour | RGB with fitted wavelengths · spectral sky tables (4–8 wavelengths) as an option | spectral ≈ 2× LUT cost est. |

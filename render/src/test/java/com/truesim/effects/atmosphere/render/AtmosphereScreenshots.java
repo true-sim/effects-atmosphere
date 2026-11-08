@@ -114,7 +114,7 @@ class AtmosphereScreenshots {
                 s.fog(0.006f, 0.03f);
                 film(s, out.resolve("film-window-shafts"), 300, (scene, t) -> {
                     scene.at(from + (to - from) * t);
-                    scene.look(AtmosphereScene.ROOM_X - 2.6, floor + 1.7, AtmosphereScene.ROOM_Z - 1.6, 70, -8, 80);
+                    scene.look(AtmosphereScene.ROOM_X - 1, floor + 1.7, AtmosphereScene.ROOM_Z - 2.3, 160, -12, 100);
                 }, Double.NaN);
                 s.fog(0, 0.03f);
             }
@@ -145,8 +145,8 @@ class AtmosphereScreenshots {
         shot(s, out, "10-fog-shafts.png", morning, 4, 2, 6, sunAzimuth(morning) - 25, 4, 70);
         double window = sunAt(summer, 8, true);
         s.fog(0.006f, 0.03f);
-        shot(s, out, "11-window-shafts.png", window, AtmosphereScene.ROOM_X - 2.6, AtmosphereScene.roomFloor() + 1.7,
-            AtmosphereScene.ROOM_Z - 1.6, 70, -8, 80);
+        shot(s, out, "11-window-shafts.png", window, AtmosphereScene.ROOM_X - 1, AtmosphereScene.roomFloor() + 1.7,
+            AtmosphereScene.ROOM_Z - 2.3, 160, -12, 100);
         s.fog(0, 0.03f);
     }
 

@@ -116,11 +116,13 @@ void lightMain(uint3 id : SV_DispatchThreadID)
     float3 p = dir * distance;
     AtmosphereFogParameters* fog = fogParameters();
     float3 scattering;
-    float sigma = fogMediumAt(fog, p, push.cameraHeight, scattering);
+    float kept;
+    float sigma = fogMediumAt(fog, p, push.cameraHeight, scattering, kept);
     float3 s = 0;
     if (sigma > 0)
     {
-        float3 light = push.ambient[0].rgb;
+        // The sky's light dimmed indoors (zones' light); the lights by their shadows
+        float3 light = push.ambient[0].rgb * kept;
         float g = fog[0].anisotropy;
         if (push.lit != 0)
         {
@@ -141,7 +143,7 @@ void lightMain(uint3 id : SV_DispatchThreadID)
             float l = length(sun);
             if (l > 0)
             {
-                light += fog[0].sunIlluminance * fogPhase(dot(sun / l, dir), g);
+                light += fog[0].sunIlluminance * fogPhase(dot(sun / l, dir), g) * kept; // unshadowed: as the hook
             }
         }
         s = scattering * light;

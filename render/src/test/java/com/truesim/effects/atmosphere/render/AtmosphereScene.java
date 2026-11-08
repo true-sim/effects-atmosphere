@@ -337,6 +337,7 @@ final class AtmosphereScene implements AutoCloseable {
     private static final AssetRef<MaterialData> STONE = material(101, 0.38f, 0.36f, 0.33f, 0.85f, 0);
     private static final AssetRef<MaterialData> WHITE = material(102, 0.8f, 0.78f, 0.74f, 0.6f, 0);
     private static final AssetRef<MaterialData> ROOF = material(103, 0.45f, 0.12f, 0.08f, 0.7f, 0);
+    private static final AssetRef<MaterialData> WOOD = material(105, 0.22f, 0.16f, 0.11f, 0.8f, 0);
     private static final AssetRef<MaterialData> WATER = material(104, 0.02f, 0.03f, 0.03f, 0.04f, 0);
 
     private long node(ComponentStore<Renderable> renderables, AssetRef<MeshData> mesh, AssetRef<MaterialData> material,
@@ -365,8 +366,9 @@ final class AtmosphereScene implements AutoCloseable {
 
     /**
      * A room 6 x 3 x 5 m on the ground at ({@link #ROOM_X}, {@link #ROOM_Z}) with a window 1.6 x 1.2 m in its east wall
-     * (+x), and an indoor zone of dusty air of its own (atmosphere-fog's IndoorZone, replacing the outdoor fog, the
-     * outdoor light kept: the froxels' shadows decide where the sun reaches): light shafts through the window.
+     * (+x), dark wooden walls, and an indoor zone of dusty air of its own (atmosphere-fog's IndoorZone, replacing the
+     * outdoor fog, a tenth of the sky's light inside; the froxels' shadows decide where the sun reaches): light shafts
+     * through the window.
      */
     void room() {
         ComponentStore<Renderable> renderables = scene.components().store(Renderable.TYPE);
@@ -383,13 +385,13 @@ final class AtmosphereScene implements AutoCloseable {
         long zone = scene.create();
         scene.setTranslation(zone, ROOM_X, y + 1.5, ROOM_Z);
         scene.components().set(zone, IndoorZone.TYPE, IndoorZone.box(new Vec3(3, 1.5, 2.5))
-            .replacing(0.06f, new Vec3(0.9, 0.9, 0.9)).withLight(1));
+            .replacing(0.12f, new Vec3(0.9, 0.9, 0.9)).withLight(0.1f));
     }
 
     /** A wall from (x0, y0, z0) to (x1, y1, z1), relative to the room's centre on its floor. */
     private void wall(ComponentStore<Renderable> renderables, double x0, double x1, double y0, double y1, double z0,
         double z1, double floor) {
-        node(renderables, BOX, WHITE, ROOM_X + (x0 + x1) / 2, floor + (y0 + y1) / 2, ROOM_Z + (z0 + z1) / 2, 0, 0, 0, 1,
+        node(renderables, BOX, WOOD, ROOM_X + (x0 + x1) / 2, floor + (y0 + y1) / 2, ROOM_Z + (z0 + z1) / 2, 0, 0, 0, 1,
             (x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2);
     }
 
