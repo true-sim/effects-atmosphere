@@ -23,6 +23,7 @@
 module fog;
 
 import hooks;
+import bindless;
 
 /** A region's shape: a box of half extents `half` along its axes. */
 public static const uint FOG_BOX = 0;
@@ -55,7 +56,17 @@ public struct AtmosphereFogParameters
     public uint regionCount = 0;                   // the technique's regions this frame
     public uint regionsPerRay = 8;                 // FogSettings.REGIONS_PER_RAY
     public uint steps = 8;                         // FogSettings.STEPS: steps per piece of a ray inside regions
+    // Froxels (a FogFroxels technique: atmosphere-render's VolumetricFog): the fog integrated in the view's frustum
+    // with every light's shadows, up to froxelFar along each ray; the hook continues from there as above
+    public uint froxels = 0;                       // sampled slot: in-scattered light (rgb) and transmittance (a)
     public uint64_t regions;                       // the technique's buffer: regionCount FogRegions
+    public float froxelFar = 0;                    // metres along a ray they reach (0: no froxels)
+    public float froxelNear = 0.5;                 // metres: their first slice's end (slices exponential after it)
+    public uint froxelSlices = 64;
+    public uint pad0 = 0;
+    public float4 froxelX = float4(0, 0, 0, 0);    // clip x of a camera-relative point (x, y, z, 1): the grid's
+    public float4 froxelY = float4(0, 0, 0, 0);    // view-projection, by rows (x, y and w)
+    public float4 froxelW = float4(0, 0, 0, 0);
 };
 
 /** A region as the technique writes it (FogRegions, AtmosphereFog), read a field at a time. */
@@ -148,8 +159,91 @@ float fogWeight(FogRegion r, float3 x)
     return r.blend > 0 ? saturate(inside / r.blend) : (inside >= 0 ? 1.0 : 0.0);
 }
 
+/**
+ * What region `r` adds at camera-relative point `x` (atmosphere-fog's media, one region): a fog volume its extinction
+ * (`sigma`) and scattering (`own`, before the light reaching it); an indoor zone takes the outdoor fog out
+ * (`outdoor`), dims the outdoor light (`lightKept`) and, replacing, adds its own lit scattering (`zones`).
+ */
+void fogRegionMedium(FogRegion r, float3 x, inout float sigma, inout float3 own, inout float3 zones,
+    inout float outdoor, inout float lightKept, bool shadowed)
+{
+    float w = fogWeight(r, x);
+    if (w <= 0)
+    {
+        return;
+    }
+    uint role = r.kind >> 4;
+    if (role == FOG_VOLUME)
+    {
+        float rise = clamp(-r.falloff * (x.y - r.center.y), -80.0, 80.0);
+        float sv = r.density * exp(rise) * w;
+        sigma += sv;
+        own += sv * r.albedo;
+    }
+    else
+    {
+        outdoor = min(outdoor, 1 - w);
+        lightKept = min(lightKept, lerp(1, r.light, w));
+        if (role == FOG_REPLACE)
+        {
+            float sz = r.density * w;
+            sigma += sz;
+            zones += sz * r.albedo * (shadowed ? 1.0 : r.light);
+        }
+    }
+}
+
+/**
+ * The fog's media at camera-relative point `x`, every region of the frame counted (the froxels' injection): its
+ * extinction per metre, and its scattering per metre (rgb, albedo included) that multiplies the light reaching the
+ * point, and in `kept` how much of the outdoor ambient light reaches it (indoor zones' `light`). Lights whose shadows
+ * the caller takes (the froxels: shadow maps decide where the sun reaches) are not dimmed by the zones; the ambient
+ * light is, by `kept`. `cameraHeight` is the camera's height over the fog's base height.
+ */
+public float fogMediumAt(AtmosphereFogParameters* fog, float3 x, float cameraHeight, out float3 scattering,
+    out float kept)
+{
+    float sigma = 0;
+    float3 own = 0;
+    float3 zones = 0;
+    float outdoor = 1;
+    float lightKept = 1;
+    uint64_t regions = fog[0].regions;
+    uint count = fog[0].regionCount;
+    if (regions != 0)
+    {
+        for (uint i = 0; i < count; i++)
+        {
+            fogRegionMedium(fogRegion(regions, i), x, sigma, own, zones, outdoor, lightKept, true);
+        }
+    }
+    float so = fog[0].density * exp(clamp(-fog[0].heightFalloff * (cameraHeight + x.y), -80.0, 80.0)) * outdoor;
+    sigma += so;
+    scattering = so * fog[0].albedo + own + zones;
+    kept = lightKept;
+    return sigma;
+}
+
+/**
+ * The froxels' integral from the camera to `distance` metres along the ray through `uv` (0 to 1 over the view):
+ * in-scattered light (rgb) and transmittance (a). Slice i ends at froxelNear * (froxelFar / froxelNear)^(i / (slices
+ * - 1)); before the first slice's end, towards nothing at the camera.
+ */
+public float4 froxelsAt(AtmosphereFogParameters* fog, float2 uv, float distance)
+{
+    float slices = float(fog[0].froxelSlices);
+    float near = fog[0].froxelNear;
+    float j = distance < near ? distance / near : 1 + log(distance / near) / log(fog[0].froxelFar / near)
+        * (slices - 1);
+    float weight = saturate(j);
+    float s = max(j - 1, 0);
+    float4 f = volumes[NonUniformResourceIndex(fog[0].froxels)].SampleLevel(samplers[LINEAR_CLAMP],
+        float3(uv, (s + 0.5) / slices), 0);
+    return float4(f.rgb * weight, lerp(1, f.a, weight));
+}
+
 /** The Henyey-Greenstein phase function, per steradian. */
-float fogPhase(float cosTheta, float g)
+public float fogPhase(float cosTheta, float g)
 {
     float d = 1 + g * g - 2 * g * cosTheta;
     return (1 - g * g) / (4 * 3.14159265 * d * sqrt(max(d, 1e-6)));
@@ -250,10 +344,25 @@ public struct AtmosphereFog : IMediaHook
 
         float transmittance = 1;
         float3 scattered = 0;
+        // Within the froxels' reach, their integral (every light, its shadows): the pieces go on from its end
+        float start = 0;
+        if (fog[0].froxelFar > 0)
+        {
+            float4 at = p.path == SHADING_SKY ? float4(dir, 0) : float4(p.position, 1);
+            float cw = dot(fog[0].froxelW, at);
+            float2 uv = float2(dot(fog[0].froxelX, at), dot(fog[0].froxelY, at)) / max(cw, 1e-6) * 0.5 + 0.5;
+            if (cw > 0 && all(uv >= 0) && all(uv <= 1))
+            {
+                start = min(dist, fog[0].froxelFar);
+                float4 f = froxelsAt(fog, uv, start);
+                scattered = f.rgb;
+                transmittance = f.a;
+            }
+        }
         uint steps = max(fog[0].steps, 1u);
         for (uint k = 0; k + 1 < n; k++)
         {
-            float a = cuts[k];
+            float a = max(cuts[k], start);
             float b = cuts[k + 1];
             float length = b - a;
             if (length <= 0)
@@ -288,31 +397,8 @@ public struct AtmosphereFog : IMediaHook
                 float3 zones = 0; // replacing zones' scattering, lit by their own light
                 for (uint h = 0; h < hits; h++)
                 {
-                    FogRegion r = fogRegion(regions, hitIndex[h]);
-                    float w = fogWeight(r, x);
-                    if (w <= 0)
-                    {
-                        continue;
-                    }
-                    uint role = r.kind >> 4;
-                    if (role == FOG_VOLUME)
-                    {
-                        float rise = clamp(-r.falloff * (x.y - r.center.y), -80.0, 80.0);
-                        float sv = r.density * exp(rise) * w;
-                        sigma += sv;
-                        own += sv * r.albedo;
-                    }
-                    else
-                    {
-                        outdoor = min(outdoor, 1 - w);
-                        lightKept = min(lightKept, lerp(1, r.light, w));
-                        if (role == FOG_REPLACE)
-                        {
-                            float sz = r.density * w;
-                            sigma += sz;
-                            zones += sz * r.albedo * r.light;
-                        }
-                    }
+                    fogRegionMedium(fogRegion(regions, hitIndex[h]), x, sigma, own, zones, outdoor, lightKept,
+                        false);
                 }
                 float so = density * exp(clamp(-falloff * (cameraHeight + x.y), -80.0, 80.0)) * outdoor;
                 sigma += so;

@@ -21,11 +21,14 @@ rootProject.name = "effects-atmosphere"
 
 // Each module is published on its own: atmosphere-ephemeris needs only the JDK and common-math (a server computing
 // the sun takes just that); atmosphere-sky adds the star catalogue and the night sky as scene assets and components;
-// atmosphere-fog is the first render plugin: fog, fog volumes and indoor zones as a media shading hook of the engine.
-include("atmosphere-ephemeris", "atmosphere-sky", "atmosphere-fog")
+// atmosphere-fog is the first render plugin: fog, fog volumes and indoor zones as a media shading hook of the engine;
+// atmosphere-render draws the sky: the Hillaire 2020 atmosphere, sky capture, aerial perspective, sun, moon and stars,
+// as techniques of the engine's frame graph and a media shading hook, over the fog.
+include("atmosphere-ephemeris", "atmosphere-sky", "atmosphere-fog", "atmosphere-render")
 project(":atmosphere-ephemeris").projectDir = file("ephemeris")
 project(":atmosphere-sky").projectDir = file("sky")
 project(":atmosphere-fog").projectDir = file("fog")
+project(":atmosphere-render").projectDir = file("render")
 
 // Sibling checkouts are used as included builds when present (override with -Ptruesim.<repo>=<path>, or false).
 val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "common-graph", "scene", "ui", "engine")
