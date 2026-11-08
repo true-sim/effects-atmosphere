@@ -1,6 +1,7 @@
 package com.truesim.effects.atmosphere.render;
 
 import com.truesim.annotations.AllowAllocation;
+import com.truesim.annotations.AllowImpure;
 import com.truesim.effects.atmosphere.fog.AtmosphereFog;
 import com.truesim.effects.atmosphere.fog.hooks.AtmosphereFogParameters;
 import com.truesim.effects.atmosphere.render.layout.FroxelPush;
@@ -118,6 +119,7 @@ public final class VolumetricFog implements AtmosphereFog.FogFroxels {
 
     @Override
     @AllowAllocation("building the graph, when it changes")
+    @AllowImpure("keeps the build's grid (its image, range and slices): the fog's hook source writes them each frame")
     public List<Image> build(GraphBuilder g, AtmosphereFog fog) {
         integrated = null;
         if (g.technique(SLOT) != FROXEL) {

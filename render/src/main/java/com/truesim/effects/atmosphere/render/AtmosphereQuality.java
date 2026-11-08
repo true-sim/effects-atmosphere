@@ -1,5 +1,6 @@
 package com.truesim.effects.atmosphere.render;
 
+import com.truesim.annotations.AllowAllocation;
 import com.truesim.effects.atmosphere.Quality;
 import com.truesim.engine.settings.EngineSettings;
 import com.truesim.engine.settings.Setting;
@@ -26,6 +27,7 @@ public final class AtmosphereQuality {
     }
 
     /** Writes preset {@code quality} into the game's layer of {@code settings}. */
+    @AllowAllocation("presets are applied once, at startup or from an options screen")
     public static EngineSettings apply(EngineSettings settings, Quality quality) {
         settings.set(EngineSettings.Layer.GAME, AtmosphereSky.SLOT.setting(), quality == Quality.LOW ? "gradient"
             : "atmosphere");
@@ -58,6 +60,7 @@ public final class AtmosphereQuality {
         return settings;
     }
 
+    @AllowAllocation("presets are applied once")
     private static <T> void set(EngineSettings settings, String field, T value) {
         Setting<T> setting = AtmosphereSky.ATMOSPHERE.setting(field);
         settings.set(EngineSettings.Layer.GAME, setting, value);

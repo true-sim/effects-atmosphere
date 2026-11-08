@@ -5,6 +5,7 @@ import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 import com.truesim.annotations.AllowAllocation;
+import com.truesim.annotations.AllowImpure;
 import com.truesim.common.graph.Id;
 import com.truesim.effects.atmosphere.render.layout.LutPush;
 import com.truesim.engine.graph.Access;
@@ -113,6 +114,7 @@ public final class SkyCapture implements Technique, AutoCloseable {
 
     @Override
     @AllowAllocation("building the graph, when it changes")
+    @AllowImpure("keeps the panorama's texture, made for the build's width, which the environment takes across builds")
     public void build(GraphBuilder g) {
         g.modify(Keys.SCENE_COLOR);
         int wanted = g.setting(AtmosphereSky.ATMOSPHERE.<Integer>setting("captureWidth"));
