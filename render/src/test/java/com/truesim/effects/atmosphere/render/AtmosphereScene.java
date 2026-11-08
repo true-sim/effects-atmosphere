@@ -52,6 +52,11 @@ import com.truesim.engine.render.shadows.Shadows;
 import com.truesim.engine.render.testing.TestMeshes;
 import com.truesim.engine.scene.SceneResources;
 import com.truesim.engine.scene.SceneSync;
+import com.truesim.engine.scene.ShadingHookComponent;
+import com.truesim.engine.scene.ShadingHookSync;
+import com.truesim.engine.render.ShadingHookValues;
+import com.truesim.effects.atmosphere.fog.AtmosphereFog;
+import com.truesim.effects.atmosphere.fog.FogRegions;
 import com.truesim.engine.vulkan.DisplayEncoding;
 import com.truesim.engine.vulkan.Format;
 import com.truesim.engine.vulkan.FrameSlots;
@@ -121,6 +126,9 @@ final class AtmosphereScene implements AutoCloseable {
     final Environment environment = Environment.uniform("atmosphere", 0, 0, 0);
     final SkyCapture capture;
     final Shadows shadows;
+    final FogRegions regions;
+    final AtmosphereFog fog;
+    final ShadingHookSync hookSync;
     final Camera camera = new Camera();
     final SceneView view;
     final long environmentNode;
@@ -141,12 +149,14 @@ final class AtmosphereScene implements AutoCloseable {
         resources = new SceneResources(assets, pool, materials, textures);
         gpu = new GpuScene(device, pool, 1024, slots);
         renderer = new MeshletRenderer(device, gpu, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, slots);
-        lights = new Lights(device, 4, 2, slots);
+        lights = new Lights(device, 4, 8, slots);
         graph = new FrameGraph(device, slots);
         AtmosphereQuality.apply(graph.settings(), quality);
         graph.settings().set(DisplayTransform.EXPOSURE, 1f);
         DisplayTransform.curve(graph.settings(), DisplayTransform.Curve.ACES);
         sync = new SceneSync(resources, scene, gpu);
+        hookSync = new ShadingHookSync(scene, ShadingHookValues.of(device));
+        regions = new FogRegions(scene);
         SkyAssets.install(paths);
         atmosphere = new Atmosphere(device, slots, graph.settings());
         environmentNode = scene.create();
@@ -172,10 +182,11 @@ final class AtmosphereScene implements AutoCloseable {
         ViewPort port = graph.addView("main").size(width, height);
         view = geometry.createView(port, camera, ViewOptions.of(1 << 15, 1 << 22));
         shadows = new Shadows(geometry, lights);
+        fog = new AtmosphereFog(view, regions).froxels(new VolumetricFog(atmosphere, view)).lighting(atmosphere);
         Key<Image> displayed = Key.image("test.displayed");
         port.add(new ClusteredForwardShading(geometry, view, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT)
                 .clearColor(0, 0, 0))
-            .add(new ClusteredLights(lights, view)).add(shadows.view(view)).add(new EnvironmentLighting(environment,
+            .add(new ClusteredLights(lights, view)).add(shadows.view(view)).add(fog).add(new EnvironmentLighting(environment,
                 view)).add(capture).add(new AtmosphereSky(atmosphere, view)).add(new AerialPerspective(atmosphere,
                 view)).add(new AmbientOcclusion(view, null)).add(new ScreenSpaceReflections(view))
             .add(new Copy(pixels, width, height, Keys.SCENE_COLOR, "capture"))
@@ -193,6 +204,16 @@ final class AtmosphereScene implements AutoCloseable {
         scene.components().set(environmentNode, SkyComponents.SKY_TIME, new SkyTime(jd, 0));
     }
 
+    /**
+     * The fog as content says it (engine-scene's ShadingHookComponent on the environment node): height fog of
+     * {@code density} per metre at the ground, thinning by {@code falloff} per metre up; 0 turns it off.
+     */
+    void fog(float density, float falloff) {
+        scene.components().set(environmentNode, ShadingHookComponent.TYPE, new ShadingHookComponent(AtmosphereFog.HOOK,
+            MaterialData.builder(AtmosphereFog.HOOK).set("density", density).set("heightFalloff", falloff)
+                .set("anisotropy", 0.7f).build().values(), density > 0));
+    }
+
     /** A frame as an application runs it: loads, the scene, the sky and its lights, then the graph. */
     void step() {
         int slot = graph.beginFrame();
@@ -200,6 +221,8 @@ final class AtmosphereScene implements AutoCloseable {
         tasks.drainCompleted();
         scene.update();
         sync.update();
+        hookSync.update();
+        regions.update();
         sky.update(gameSeconds, camera.position(0), camera.position(1), camera.position(2));
         atmosphere.light(lights, 0, 1);
         view.set(1, MeshletRenderer.MODE_LIT);
@@ -267,7 +290,7 @@ final class AtmosphereScene implements AutoCloseable {
         int n = 0;
         for (int i = 0; i < width * height; i += 7) {
             double y = 0.2126 * rgb[0][i] + 0.7152 * rgb[1][i] + 0.0722 * rgb[2][i];
-            if (Double.isFinite(y)) {
+            if (Double.isFinite(y) && y / atmosphere.sceneUnits() > 1e-5) { // not space's black
                 sum += Math.log(Math.max(y, 1e-12) / atmosphere.sceneUnits());
                 n++;
             }
@@ -308,7 +331,7 @@ final class AtmosphereScene implements AutoCloseable {
     private static final AssetRef<MeshData> ROCK = mesh(101, () -> TestMeshes.rock(5));
     private static final AssetRef<MeshData> BOX = mesh(102, TestMeshes::box);
     private static final AssetRef<MeshData> QUAD = mesh(103, TestMeshes::quad);
-    private static final AssetRef<MaterialData> GROUND = material(100, 0.16f, 0.17f, 0.09f, 0.95f, 0);
+    private static final AssetRef<MaterialData> GROUND = material(100, 0.07f, 0.11f, 0.035f, 0.95f, 0);
     private static final AssetRef<MaterialData> STONE = material(101, 0.38f, 0.36f, 0.33f, 0.85f, 0);
     private static final AssetRef<MaterialData> WHITE = material(102, 0.8f, 0.78f, 0.74f, 0.6f, 0);
     private static final AssetRef<MaterialData> ROOF = material(103, 0.45f, 0.12f, 0.08f, 0.7f, 0);
@@ -459,6 +482,7 @@ final class AtmosphereScene implements AutoCloseable {
         sky.close();
         sync.close();
         graph.close();
+        fog.close();
         shadows.close();
         capture.close();
         atmosphere.close();

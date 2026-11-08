@@ -48,7 +48,7 @@ class AtmosphereScreenshots {
             double sunset = sunAt(summer + 0.5, 1.5, false);
             shot(s, out, "02-sunset.png", sunset, 0, 2, 0, sunAzimuth(sunset), 3, 70);
             double belt = sunAt(summer + 0.5, -2.5, false);
-            shot(s, out, "03-earth-shadow.png", belt, 0, 2, 0, sunAzimuth(belt) + 180, 6, 80);
+            shot(s, out, "03-earth-shadow.png", belt, 0, 1500, 0, sunAzimuth(belt) + 180, 4, 80);
             double twilight = sunAt(summer + 0.5, -6, false);
             shot(s, out, "04-twilight.png", twilight, 0, 2, 0, sunAzimuth(twilight), 8, 80);
             double moonlit = moonlitNight();
@@ -58,8 +58,13 @@ class AtmosphereScreenshots {
             double afternoon = summer + 15.0 / 24;
             shot(s, out, "07-altitude-10km.png", afternoon, 0, 10_000, 0, sunAzimuth(afternoon) + 120, -2, 75);
             double evening = sunAt(summer + 0.5, 3, false);
-            shot(s, out, "08-orbit-400km-sunset.png", evening, 0, 400_000, 0, sunAzimuth(evening), -12, 75);
+            shot(s, out, "08-orbit-400km-terminator.png", evening, 0, 400_000, 0, sunAzimuth(evening) + 180, -16, 75);
             shot(s, out, "09-orbit-400km-day.png", afternoon, 0, 400_000, 0, sunAzimuth(afternoon) + 90, -16, 75);
+            // Morning fog with the low sun's shafts through it, the house and rocks casting them
+            double morning = sunAt(summer, 6, true);
+            s.fog(0.012f, 0.03f);
+            shot(s, out, "10-fog-shafts.png", morning, 4, 2, 6, sunAzimuth(morning) - 25, 4, 70);
+            s.fog(0, 0.03f);
             if (!"false".equals(System.getenv("TRUESIM_ATMOSPHERE_FILM"))) {
                 film(s, Files.createDirectories(out.resolve("frames")));
             }

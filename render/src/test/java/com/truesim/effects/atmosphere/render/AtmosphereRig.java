@@ -26,7 +26,13 @@ import com.truesim.engine.render.EnvironmentLighting;
 import com.truesim.engine.render.GeometryPool;
 import com.truesim.engine.render.GpuScene;
 import com.truesim.engine.render.Keys;
+import com.truesim.common.state.ChangeClock;
+import com.truesim.effects.atmosphere.fog.AtmosphereFog;
+import com.truesim.effects.atmosphere.fog.FogRegions;
 import com.truesim.engine.render.Lights;
+import com.truesim.engine.render.shadows.Shadows;
+import com.truesim.scene.core.SceneGraph;
+import com.truesim.scene.core.ShadowSpec;
 import com.truesim.engine.render.Material;
 import com.truesim.engine.render.Materials;
 import com.truesim.engine.render.materials.MetallicRoughnessParameters;
@@ -82,19 +88,32 @@ final class AtmosphereRig implements AutoCloseable {
     final int mirror;
     final int black;
 
+    /** atmosphere-fog's fog with volumetric fog (with {@code fog}), and the sun's cascaded shadows. */
+    AtmosphereFog fog;
+    Shadows shadows;
+    final SceneGraph fogScene = new SceneGraph(new ChangeClock());
+    private FogRegions regions;
+
     AtmosphereRig(VulkanDevice device, int width, int height) {
         this(device, width, height, true);
     }
 
-    /** With the sky captured into the environment ({@code capture}), or the environment left black. */
     AtmosphereRig(VulkanDevice device, int width, int height, boolean captured) {
+        this(device, width, height, captured, false);
+    }
+
+    /**
+     * With the sky captured into the environment ({@code captured}), or the environment left black; with the fog
+     * (froxels lit by the light list, the sun casting cascaded shadows) or without.
+     */
+    AtmosphereRig(VulkanDevice device, int width, int height, boolean captured, boolean fogged) {
         this.device = device;
         this.width = width;
         this.height = height;
         pool = new GeometryPool(device, GeometryPool.Capacity.of(1 << 16, 2048, 16), slots);
         scene = new GpuScene(device, pool, 1024, slots);
         renderer = new MeshletRenderer(device, scene, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, slots);
-        lights = new Lights(device, 4, 1, slots);
+        lights = new Lights(device, 4, 8, slots);
         textures = new Textures(device, slots);
         materials = new Materials(device, 4, slots);
         grey = materials.add(new Material(MetallicRoughnessParameters.DEFAULTS.withBaseColor(new Color(0.5, 0.5, 0.5, 1))
@@ -126,6 +145,13 @@ final class AtmosphereRig implements AutoCloseable {
         if (captured) {
             port.add(capture);
         }
+        if (fogged) {
+            lights.shadow(0, ShadowSpec.cascades(3, 1024, 300));
+            shadows = new Shadows(geometry, lights);
+            regions = new FogRegions(fogScene);
+            fog = new AtmosphereFog(view, regions).froxels(new VolumetricFog(atmosphere, view)).lighting(atmosphere);
+            port.add(shadows.view(view)).add(fog);
+        }
         port.add(sky).add(aerial)
             .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, target.output());
     }
@@ -137,12 +163,17 @@ final class AtmosphereRig implements AutoCloseable {
 
     /** Adds {@code mesh} of {@code material} at ({@code x}, {@code y}, {@code z}) scaled by {@code scale}. */
     int add(MeshData mesh, int material, double x, double y, double z, float scale) {
+        return add(mesh, material, x, y, z, scale, scale, scale);
+    }
+
+    /** Adds {@code mesh} of {@code material} at ({@code x}, {@code y}, {@code z}) scaled along each axis. */
+    int add(MeshData mesh, int material, double x, double y, double z, float sx, float sy, float sz) {
         int index;
         try (mesh) {
             index = pool.add(mesh);
         }
         int id = instances++;
-        scene.set(id, index, material, x, y, z, 0, 0, 0, 1, scale, scale, scale);
+        scene.set(id, index, material, x, y, z, 0, 0, 0, 1, sx, sy, sz);
         return id;
     }
 
@@ -154,6 +185,10 @@ final class AtmosphereRig implements AutoCloseable {
             atmosphere.update(night, camera.position(0), camera.position(1), camera.position(2));
             if (lit) {
                 atmosphere.light(lights, 0, 1);
+            }
+            if (regions != null) {
+                fogScene.update();
+                regions.update();
             }
             view.set(1, MeshletRenderer.MODE_LIT);
             graph.submit(0, 0);
@@ -184,6 +219,10 @@ final class AtmosphereRig implements AutoCloseable {
     public void close() {
         device.waitIdle();
         graph.close();
+        if (fog != null) {
+            fog.close();
+            shadows.close();
+        }
         capture.close();
         atmosphere.close();
         target.close();

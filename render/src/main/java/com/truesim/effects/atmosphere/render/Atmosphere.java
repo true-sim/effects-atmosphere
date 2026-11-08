@@ -6,6 +6,7 @@ import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 import com.truesim.annotations.AllowAllocation;
 import com.truesim.common.math.Maths;
 import com.truesim.effects.atmosphere.ephemeris.CelestialBody;
+import com.truesim.effects.atmosphere.fog.AtmosphereFog;
 import com.truesim.effects.atmosphere.ephemeris.Ephemeris;
 import com.truesim.effects.atmosphere.ephemeris.Galactic;
 import com.truesim.effects.atmosphere.ephemeris.Sun;
@@ -55,7 +56,7 @@ import java.util.Objects;
  *
  * <p>{@link #update} allocates nothing; a new star catalogue or media do.
  */
-public final class Atmosphere implements AutoCloseable {
+public final class Atmosphere implements AutoCloseable, AtmosphereFog.FogLighting {
 
     /** The sun's radius, km (IAU 2015 nominal). */
     public static final double SUN_RADIUS_KM = 695_700;
@@ -110,6 +111,11 @@ public final class Atmosphere implements AutoCloseable {
     private double starsUploadedJde = Double.NaN;
     private int starCount;
     private final double[] scratch = new double[3];
+    private final double[] ambient = new double[3];
+    // The lights when the light version last changed
+    private final double[] lastSun = {0, 1, 0};
+    private final double[] lastMoon = {0, -1, 0};
+    private final double[] lastLight = new double[2];
     private final double[] colour = new double[3];
     private final float[] rgb = new float[3];
 
@@ -206,14 +212,6 @@ public final class Atmosphere implements AutoCloseable {
         cameraY = y;
         cameraZ = z;
         double units = sceneUnits();
-        double oldSun0 = sunIlluminance[1];
-        double oldMoon0 = moonIlluminance[1];
-        double sx = sun[0];
-        double sy = sun[1];
-        double sz = sun[2];
-        double mx = moon[0];
-        double my = moon[1];
-        double mz = moon[2];
         if (sky != null && !fixed) {
             Ephemeris eph = sky.ephemeris();
             originAltitude = eph.observer().altitude();
@@ -243,10 +241,18 @@ public final class Atmosphere implements AutoCloseable {
         }
         sunAltitude = Maths.toDegrees(Maths.asin(Maths.clamp(sun[1], -1, 1)));
         moonDiscFactor = moonDisc();
-        double moved = Math.max(angle(sx, sy, sz, sun), moonIlluminance[1] > 0 ? angle(mx, my, mz, moon) : 0);
-        if (moved > config.captureAngle() || changed(oldSun0, sunIlluminance[1]) || changed(oldMoon0,
+        // Against the lights as they were when the version last changed: slow motion adds up
+        double moved = Math.max(angle(lastSun[0], lastSun[1], lastSun[2], sun), moonIlluminance[1] > 0
+            ? angle(lastMoon[0], lastMoon[1], lastMoon[2], moon) : 0);
+        if (moved > config.captureAngle() || changed(lastLight[0], sunIlluminance[1]) || changed(lastLight[1],
             moonIlluminance[1])) {
             lightVersion++;
+            for (int c = 0; c < 3; c++) {
+                lastSun[c] = sun[c];
+                lastMoon[c] = moon[c];
+            }
+            lastLight[0] = sunIlluminance[1];
+            lastLight[1] = moonIlluminance[1];
         }
         uploadStars();
         write();
@@ -627,6 +633,37 @@ public final class Atmosphere implements AutoCloseable {
         if (!same) {
             lights.directional(index, (float) -direction[0], (float) -direction[1], (float) -direction[2],
                 (float) colour[0], (float) colour[1], (float) colour[2]);
+        }
+    }
+
+    /**
+     * The sky's isotropic radiance, scene units (the sky-view table's mean over the sphere, the lit ground included),
+     * as a {@link VolumetricFog} last read it back (a frame or two old; 0 before), into {@code out}.
+     */
+    public void skyAmbient(double[] out) {
+        out[0] = ambient[0];
+        out[1] = ambient[1];
+        out[2] = ambient[2];
+    }
+
+    /** Takes the sky's isotropic radiance read back from the GPU (VolumetricFog). */
+    void skyAmbient(float r, float g, float b) {
+        ambient[0] = r;
+        ambient[1] = g;
+        ambient[2] = b;
+    }
+
+    /**
+     * Lights atmosphere-fog's fog ({@code fog.lighting(atmosphere)}): the sun's direction and its illuminance at the
+     * camera, the sky's isotropic radiance ({@link #skyAmbient}). Allocates nothing.
+     */
+    @Override
+    public void light(float[] sunDirection, float[] sunIlluminance, float[] skyRadiance) {
+        lightAtCamera(0, colour);
+        for (int c = 0; c < 3; c++) {
+            sunDirection[c] = (float) sun[c];
+            sunIlluminance[c] = (float) colour[c];
+            skyRadiance[c] = (float) ambient[c];
         }
     }
 

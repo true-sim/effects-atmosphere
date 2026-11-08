@@ -10,6 +10,7 @@ description = "The sky of true-sim drawn: the Hillaire 2020 atmosphere (transmit
 
 dependencies {
     api(project(":atmosphere-sky"))
+    api(project(":atmosphere-fog")) // volumetric fog: froxels for its media and hook
     api("com.truesim.engine:engine-scene:0.192.0") // the renderer, its shading hooks, the scene bridge
     testImplementation(testFixtures("com.truesim.engine:engine-render:0.192.0")) // the headless renderer
     testImplementation("com.truesim.scene:scene-meshbuild:0.70.0")
